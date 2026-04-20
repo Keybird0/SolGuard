@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 SolGuard Contributors
 """Core data structures for SolGuard skill.
 
 These dataclasses are intentionally lightweight (stdlib-only) so they can

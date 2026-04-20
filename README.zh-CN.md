@@ -99,7 +99,20 @@ cd solguard-server && npm install && npm run dev
 
 ## 许可证
 
-[MIT](./LICENSE) © 2026 SolGuard Contributors
+SolGuard 以 **[MIT License](./LICENSE)** 开源发布，完整协议见
+[`LICENSE`](./LICENSE) 文件。
+
+```
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 SolGuard Contributors
+```
+
+第三方依赖各自保留原有协议，详见
+[`LICENSE-THIRD-PARTY.md`](./LICENSE-THIRD-PARTY.md) 与
+[`NOTICE`](./NOTICE)。
+
+你可以自由使用、修改、再分发本软件（商业用途亦可），前提是在所有副本或
+实质性部分中保留上述版权声明与 MIT 协议文本。
 
 ---
 

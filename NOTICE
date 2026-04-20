@@ -1,0 +1,29 @@
+SolGuard
+Copyright (c) 2026 SolGuard Contributors
+
+Licensed under the MIT License. See the LICENSE file in the project root
+for the full license text.
+
+SPDX-License-Identifier: MIT
+
+------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------
+
+This software depends on several third-party open-source projects, each
+distributed under its own license. A non-exhaustive list is maintained in
+LICENSE-THIRD-PARTY.md. All third-party licenses are preserved verbatim
+in the respective package metadata (node_modules/ / site-packages/) and
+are NOT modified by this project.
+
+Noteworthy upstream projects credited in README.md:
+
+  - OpenHarness        (Apache-2.0 / consult upstream)
+  - GoatGuard          (see upstream repo)
+  - Sealevel Attacks   (ISC / MIT — consult upstream)
+  - Solana Web3.js     (Apache-2.0)
+  - Anchor             (Apache-2.0)
+
+If you redistribute SolGuard, you MUST retain this NOTICE file and the
+LICENSE file intact, and comply with the licenses of all third-party
+dependencies you choose to ship.

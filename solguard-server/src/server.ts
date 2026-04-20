@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 SolGuard Contributors
 import path from 'node:path';
 import cors from 'cors';
 import express from 'express';

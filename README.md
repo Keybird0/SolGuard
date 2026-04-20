@@ -180,7 +180,21 @@ Rough workflow:
 
 ## License
 
-[MIT](./LICENSE) © 2026 SolGuard Contributors
+SolGuard is released under the **[MIT License](./LICENSE)** — see
+[`LICENSE`](./LICENSE) for the full text.
+
+```
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 SolGuard Contributors
+```
+
+Third-party dependencies retain their original licenses; see
+[`LICENSE-THIRD-PARTY.md`](./LICENSE-THIRD-PARTY.md) and
+[`NOTICE`](./NOTICE).
+
+You are free to use, modify, and distribute this software — commercially
+or otherwise — provided you preserve the above copyright notice and the
+MIT license text in all copies or substantial portions of the Software.
 
 ---
 

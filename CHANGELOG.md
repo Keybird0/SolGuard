@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `NOTICE` and `LICENSE-THIRD-PARTY.md` — formal MIT + upstream licence attribution.
+- SPDX identifier (`SPDX-License-Identifier: MIT`) block in both READMEs.
+
+### Changed
+- README License section expanded with explicit usage terms and pointers
+  to NOTICE / LICENSE-THIRD-PARTY.
+
+### Already in place
+- `LICENSE` — full MIT text (© 2026 SolGuard Contributors).
+- `solguard-server/package.json` — `"license": "MIT"`.
+- `skill/solana-security-audit-skill/pyproject.toml` — `license = { text = "MIT" }`.
+- MIT shields badge in README.
+
+---
 - Initial project scaffold (Phase 1)
 - Repository layout: `solguard-server/`, `skill/`, `test-fixtures/`, `scripts/`, `docs/`
 - Root config: `.gitignore`, `.env.example`, `.editorconfig`, `LICENSE` (MIT)
