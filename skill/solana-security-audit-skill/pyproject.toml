@@ -1,0 +1,41 @@
+[project]
+name = "solana-security-audit-skill"
+version = "0.1.0"
+description = "OpenHarness skill that audits Solana/Anchor smart contracts."
+readme = "SKILL.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "SolGuard Contributors" }]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["outputs", "work"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "S", "C90", "RUF"]
+ignore = [
+    "S101",
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "N"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra -q --strict-markers"

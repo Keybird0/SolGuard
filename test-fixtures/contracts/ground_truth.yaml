@@ -1,0 +1,33 @@
+# Ground truth for seed test fixtures.
+# Consumed by scripts/run_benchmark.py (Phase 6).
+
+fixtures:
+  - file: 01_missing_signer.rs
+    expected:
+      - rule_id: missing_signer_check
+        severity: High
+        approx_line: 25
+
+  - file: 02_missing_owner.rs
+    expected:
+      - rule_id: missing_owner_check
+        severity: High
+        approx_line: 30
+
+  - file: 03_integer_overflow.rs
+    expected:
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 22
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 28
+
+  - file: 04_arbitrary_cpi.rs
+    expected:
+      - rule_id: arbitrary_cpi
+        severity: Critical
+        approx_line: 31
+
+  - file: 05_clean_contract.rs
+    expected: []

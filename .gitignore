@@ -1,0 +1,70 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ============ Node / TypeScript ============
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.eslintcache
+
+# ============ Env & Secrets ============
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+.local-notes.md
+
+# ============ Data / Outputs ============
+data/
+outputs/**
+!outputs/.gitkeep
+logs/
+*.log
+.DS_Store
+
+# ============ External References ============
+references/
+.cache/
+llm-cache/
+
+# ============ IDE ============
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+
+# ============ OS ============
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+
+# ============ Solana / Anchor ============
+target/
+.anchor/
+test-ledger/
+
+# ============ Docker ============
+*.local.tar
