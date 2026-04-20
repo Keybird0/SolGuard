@@ -1,26 +1,28 @@
-# Core LLM providers
+# ⚠️  pyproject.toml + uv.lock are the authoritative dependency source.
+#
+# This file is kept ONLY as a pip-compatible fallback for environments
+# that don't have `uv` yet (e.g. some CI runners, container base images).
+# Regenerate it with:
+#
+#     uv export --format requirements-txt --no-hashes --no-dev > requirements.txt
+#
+# Prefer `uv sync` locally:
+#     uv sync                     # runtime + dev
+#     uv sync --extra test        # + test extra
+#     uv sync --extra parser      # + tree-sitter (Phase 6)
+
 anthropic>=0.34.0
 openai>=1.40.0
-
-# Data / validation
 pydantic>=2.8.0
 python-dotenv>=1.0.1
 pyyaml>=6.0.1
-
-# Async / http
 httpx>=0.27.0
 tenacity>=9.0.0
 
-# Testing
+# ---- dev / tests (installed via extras; kept here for pip parity) ----
 pytest>=8.3.0
 pytest-cov>=5.0.0
 pytest-asyncio>=0.23.0
-
-# Dev tooling
 ruff>=0.5.5
 black>=24.8.0
 mypy>=1.11.0
-
-# Optional (Phase 6 — AST parser)
-# tree-sitter>=0.22.0
-# tree-sitter-rust>=0.21.0

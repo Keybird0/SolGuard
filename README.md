@@ -99,10 +99,18 @@ SolGuard/
 ### Prerequisites
 
 - **Node.js** ≥ 20
-- **Python** ≥ 3.10
+- **[uv](https://docs.astral.sh/uv/)** ≥ 0.4 — **the only supported Python toolchain for SolGuard**
+  - uv manages the Python interpreter (3.11, pinned via `.python-version`), virtualenv, dependencies and `uv.lock`.
+  - `pip` / `venv` / `poetry` / `conda` are **not** supported as the primary workflow.
 - **Solana CLI** (for Devnet testing)
-- **OpenHarness** (`pip install openharness-ai`)
+- **OpenHarness** — installed through uv: `uv tool install openharness-ai`
 - Anthropic or OpenAI API key
+
+> No uv yet?
+>
+> ```bash
+> curl -LsSf https://astral.sh/uv/install.sh | sh   # or:  brew install uv
+> ```
 
 ### Setup
 
@@ -110,21 +118,28 @@ SolGuard/
 git clone https://github.com/Keybird0/SolGuard.git
 cd SolGuard
 
-# One-shot setup script (coming soon)
+# One-shot setup (auto-checks uv, runs `npm install` + `uv sync`,
+# then executes the Phase 1 verification script)
 bash scripts/setup.sh
 
 # Or manually:
-cp .env.example .env                     # fill in secrets
-cd solguard-server && npm install
-cd ../skill/solana-security-audit-skill && pip install -r requirements.txt
+cp .env.example .env                              # fill in secrets
+cd solguard-server && npm install && cd ..
+cd skill/solana-security-audit-skill
+uv sync --extra test                              # creates .venv + installs deps from uv.lock
 ```
 
 ### Run locally
 
 ```bash
-cd solguard-server
-npm run dev
+# Backend
+cd solguard-server && npm run dev
 # → open http://localhost:3000
+
+# Skill commands — always via `uv run` (no `activate` needed)
+cd skill/solana-security-audit-skill
+uv run pytest -q
+uv run ruff check .
 ```
 
 ### Verify Phase 1 setup
@@ -132,6 +147,27 @@ npm run dev
 ```bash
 bash scripts/verify-phase1.sh
 ```
+
+### Dependency management cheatsheet (Python)
+
+```bash
+cd skill/solana-security-audit-skill
+
+uv sync                   # install runtime + dev deps (reads pyproject.toml + uv.lock)
+uv sync --extra test      # + pytest stack
+uv sync --extra parser    # + tree-sitter-rust (Phase 6 optional parser)
+uv add pydantic-settings  # add a runtime dep (updates pyproject.toml + uv.lock)
+uv add --dev pytest-mock  # add a dev-only dep
+uv remove tenacity        # remove a dep
+uv lock                   # refresh the lockfile without syncing
+uv lock --check           # CI guard: fail if lock and pyproject drift
+uv run <any-command>      # run inside the managed venv
+
+# Generate pip-compatible requirements (for platforms that only speak pip)
+uv export --format requirements-txt --no-hashes --no-dev > requirements.txt
+```
+
+> `uv.lock` is the source of truth — **commit it** with every dependency change.
 
 ---
 

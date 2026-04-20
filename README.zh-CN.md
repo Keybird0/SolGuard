@@ -62,23 +62,67 @@ SolGuard/
 
 ### 环境要求
 
-- Node.js ≥ 20 · Python ≥ 3.10 · Solana CLI · OpenHarness (`pip install openharness-ai`)
+- **Node.js** ≥ 20
+- **[uv](https://docs.astral.sh/uv/)** ≥ 0.4 — **SolGuard 唯一指定的 Python 工具链**
+  - Python 版本由 `.python-version` 固定为 **3.11**，由 uv 自动下载解释器
+  - 依赖真相源是 `pyproject.toml` + `uv.lock`，**`uv.lock` 必须提交**
+  - 禁止把 `pip` / `python -m venv` / `poetry` / `conda` 作为主流程
+- **Solana CLI**（Devnet 联调）
+- **OpenHarness** — 用 uv 安装：`uv tool install openharness-ai`
 - Anthropic 或 OpenAI API Key
+
+> 还没装 uv？
+>
+> ```bash
+> curl -LsSf https://astral.sh/uv/install.sh | sh   # 或：brew install uv
+> ```
 
 ### 初始化
 
 ```bash
 git clone https://github.com/Keybird0/SolGuard.git
 cd SolGuard
-cp .env.example .env                       # 填写密钥
-bash scripts/verify-phase1.sh              # 校验环境
+
+# 一键：检查 uv、装 npm 依赖、执行 `uv sync`、跑 Phase 1 验收脚本
+bash scripts/setup.sh
+
+# 或手动：
+cp .env.example .env                              # 填写密钥
+cd solguard-server && npm install && cd ..
+cd skill/solana-security-audit-skill
+uv sync --extra test                              # 按 uv.lock 生成 .venv + 安装依赖
 ```
 
 ### 本地运行
 
 ```bash
-cd solguard-server && npm install && npm run dev
+# 后端
+cd solguard-server && npm run dev
 # 打开 http://localhost:3000
+
+# Skill 下的所有 Python 命令都走 uv run（无需 source .venv）
+cd skill/solana-security-audit-skill
+uv run pytest -q
+uv run ruff check .
+```
+
+### 依赖管理速查（Python 专用）
+
+```bash
+cd skill/solana-security-audit-skill
+
+uv sync                   # 默认同步（runtime + dev）
+uv sync --extra test      # 加上测试 extra
+uv sync --extra parser    # 加上 tree-sitter-rust（Phase 6 可选解析器）
+uv add pydantic-settings  # 新增依赖（自动更新 pyproject.toml + uv.lock）
+uv add --dev pytest-mock  # 新增 dev-only 依赖
+uv remove tenacity        # 删除依赖
+uv lock                   # 仅刷新 uv.lock
+uv lock --check           # CI 守卫：pyproject 与 lock 不一致直接失败
+uv run <任意命令>          # 在托管的 venv 内执行
+
+# 导出 pip 兼容 requirements（给只认 pip 的部署平台用）
+uv export --format requirements-txt --no-hashes --no-dev > requirements.txt
 ```
 
 ---

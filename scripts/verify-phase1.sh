@@ -59,11 +59,19 @@ else
   PY_BIN="python3"
 fi
 
+if command -v uv >/dev/null 2>&1; then
+  pass "uv: $(uv --version 2>/dev/null | head -n1)"
+  HAS_UV=1
+else
+  fail "uv not found — SolGuard requires uv to manage Python deps. Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+  HAS_UV=0
+fi
+
 if command -v oh >/dev/null; then
   oh_v=$(oh --version 2>/dev/null | head -n1 || echo "?")
   pass "OpenHarness CLI: ${oh_v}"
 else
-  fail "OpenHarness CLI 'oh' not found (pip install openharness-ai)"
+  fail "OpenHarness CLI 'oh' not found (install via: uv tool install openharness-ai)"
 fi
 
 if command -v solana >/dev/null; then
@@ -117,6 +125,9 @@ for f in \
   solguard-server/tsconfig.json \
   solguard-server/src/server.ts \
   skill/solana-security-audit-skill/SKILL.md \
+  skill/solana-security-audit-skill/pyproject.toml \
+  skill/solana-security-audit-skill/.python-version \
+  skill/solana-security-audit-skill/uv.lock \
   skill/solana-security-audit-skill/core/types.py \
   skill/solana-security-audit-skill/tools/solana_parse.py \
   skill/solana-security-audit-skill/tools/solana_scan.py \
@@ -140,14 +151,25 @@ fi
 # --------------------------------------------------------
 sect "5. Python skill smoke test"
 # --------------------------------------------------------
-cd skill/solana-security-audit-skill
-if PYTHONPATH=. "$PY_BIN" -c "
-import json
+# Prefer `uv run` (managed env). Fall back to bare interpreter only if
+# uv is unavailable, but warn loudly — uv is the project standard.
+SKILL_DIR="skill/solana-security-audit-skill"
+
+run_skill_py() {
+  # $1 = inline python code
+  if (( HAS_UV == 1 )) && [[ -f "$SKILL_DIR/pyproject.toml" ]]; then
+    (cd "$SKILL_DIR" && uv run --no-sync python -c "$1" 2>/dev/null) \
+      || (cd "$SKILL_DIR" && uv run python -c "$1" 2>/dev/null)
+  else
+    (cd "$SKILL_DIR" && PYTHONPATH=. "$PY_BIN" -c "$1" 2>/dev/null)
+  fi
+}
+
+SMOKE_CODE="
 from core.types import Finding, Severity, Statistics
 from tools.solana_parse import parse_source
 from tools.solana_scan import scan
 from tools.solana_report import build_scan_result, emit
-from pathlib import Path
 
 sample = open('../../test-fixtures/contracts/01_missing_signer.rs').read()
 parsed = parse_source(sample, '01_missing_signer.rs')
@@ -155,22 +177,31 @@ scan_out = scan(parsed, sample)
 assert 'findings' in scan_out
 assert 'statistics' in scan_out
 print('parse_ok=1, scan_ok=1')
-" 2>/dev/null; then
+"
+
+if run_skill_py "$SMOKE_CODE" >/dev/null; then
   pass "Python skill modules import & execute"
 else
   fail "Python skill smoke test failed"
 fi
-cd "$ROOT"
 
 # --------------------------------------------------------
-sect "6. Python pytest"
+sect "6. Python pytest (via uv)"
 # --------------------------------------------------------
-if (cd skill/solana-security-audit-skill && PYTHONPATH=. "$PY_BIN" -m pytest -q tests/test_types.py >/dev/null 2>&1); then
-  pass "pytest core.types passes"
-elif (cd skill/solana-security-audit-skill && PYTHONPATH=. "$PY_BIN" -c "import pytest" >/dev/null 2>&1); then
-  fail "pytest core.types failed"
+if (( HAS_UV == 1 )); then
+  if (cd "$SKILL_DIR" && uv run --no-sync pytest -q tests/test_types.py >/dev/null 2>&1); then
+    pass "uv run pytest tests/test_types.py passes"
+  elif (cd "$SKILL_DIR" && uv run pytest -q tests/test_types.py >/dev/null 2>&1); then
+    pass "uv run pytest tests/test_types.py passes (after sync)"
+  else
+    fail "uv run pytest failed — try 'uv sync --extra test' in $SKILL_DIR"
+  fi
 else
-  warn "pytest not installed (pip install -r skill/solana-security-audit-skill/requirements.txt)"
+  if (cd "$SKILL_DIR" && PYTHONPATH=. "$PY_BIN" -m pytest -q tests/test_types.py >/dev/null 2>&1); then
+    warn "pytest passed via bare interpreter — please install uv for consistent results"
+  else
+    warn "pytest not runnable (install uv then run: cd $SKILL_DIR && uv sync --extra test)"
+  fi
 fi
 
 # --------------------------------------------------------

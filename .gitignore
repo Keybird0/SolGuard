@@ -1,4 +1,7 @@
-# ============ Python ============
+# ============ Python (uv-managed) ============
+# Commit pyproject.toml, uv.lock and .python-version — they ARE the
+# source of truth for the Python environment. Everything below is
+# derivable/generated and therefore ignored.
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,6 +13,7 @@ env/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
 .coverage
 coverage.xml
 htmlcov/
