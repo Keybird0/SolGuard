@@ -50,6 +50,10 @@ logs/
 references/
 .cache/
 llm-cache/
+.llm-cache/
+
+# ============ Vercel ============
+.vercel/
 
 # ============ IDE ============
 .idea/

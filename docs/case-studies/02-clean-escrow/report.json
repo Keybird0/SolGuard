@@ -1,0 +1,21 @@
+{
+  "contract_name": "rw08_clean_escrow",
+  "contract_path": "test-fixtures/real-world/medium/rw08_clean_escrow.rs",
+  "risk_level": "Info",
+  "findings": [],
+  "statistics": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0,
+    "total": 0
+  },
+  "timestamp": "2026-04-25T02:07:06.000000+00:00",
+  "inputs_summary": "scan_hints=0 semgrep_hits=1 ai_provider=openai ai_model=gpt-5.4",
+  "source_visibility": "source",
+  "decision": "proceed",
+  "callback": {
+    "status": "completed"
+  }
+}
