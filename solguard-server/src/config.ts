@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+function optionalEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
@@ -25,7 +30,7 @@ const configSchema = z.object({
   solanaCluster: z.enum(['devnet', 'testnet', 'mainnet-beta']).default('devnet'),
   solanaRpcUrl: z.string().url().default('https://api.devnet.solana.com'),
   solanaServiceWallet: z.string().optional(),
-  auditPriceSol: z.coerce.number().positive().default(0.01),
+  auditPriceSol: z.coerce.number().positive().default(0.001),
   paymentTimeoutMs: z.coerce.number().int().positive().default(600_000),
   paymentPollIntervalMs: z.coerce.number().int().positive().default(5_000),
   freeAudit: z.coerce.boolean().default(false),
@@ -57,7 +62,7 @@ const configSchema = z.object({
 
   ohCliPath: z.string().default('oh'),
   ohSkillDir: z.string().optional(),
-  ohOutputFormat: z.enum(['json-stream', 'json']).default('json-stream'),
+  ohOutputFormat: z.enum(['json-stream', 'stream-json', 'json']).default('stream-json'),
   agentCallbackToken: z.string().default('change-me-to-random-string'),
   agentHmacRequired: z.coerce.boolean().default(false),
   agentTimeoutMs: z.coerce.number().int().positive().default(600_000),
@@ -122,7 +127,10 @@ export const config: Config = configSchema.parse({
   emailBccOperator: process.env.EMAIL_BCC_OPERATOR,
   frontendUrl: process.env.FRONTEND_URL,
 
-  larkWebhookUrl: process.env.LARK_WEBHOOK_URL,
+  larkWebhookUrl:
+    optionalEnv(process.env.LARK_WEBHOOK_URL) ??
+    optionalEnv(process.env.FEISHU_WEBHOOK_URL) ??
+    optionalEnv(process.env.FEISHU_WEBHOOK),
   larkNotifyStages: process.env.LARK_NOTIFY_STAGES,
   larkEnvTag: process.env.LARK_ENV_TAG,
 
@@ -162,4 +170,12 @@ export function hasAnyLlmKey(): boolean {
 
 export function isPaymentConfigured(): boolean {
   return Boolean(config.solanaServiceWallet);
+}
+
+export function isEmailConfigured(): boolean {
+  return Boolean(config.smtpHost && config.smtpUser && config.smtpPass);
+}
+
+export function isLarkConfigured(): boolean {
+  return Boolean(config.larkWebhookUrl);
 }

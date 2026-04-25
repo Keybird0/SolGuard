@@ -54,33 +54,27 @@ export async function buildPaymentTx({
 }
 
 /**
- * Ask the injected wallet to sign + send. Supports the modern
- * `signAndSendTransaction` wallet-standard API (Phantom, Backpack, Solflare).
- * Falls back to `signTransaction` + manual broadcast if needed.
+ * Ask the injected wallet to sign, then broadcast through the page's devnet
+ * Connection. Keeping broadcast under our Connection avoids a subtle mismatch:
+ * wallet-side `signAndSendTransaction` uses the wallet's currently selected
+ * cluster/RPC, while the payment request is always devnet.
  */
 export async function signAndSend({ provider, tx, conn }) {
-  // In demo mode with a real wallet, Phantom's signAndSendTransaction uses
-  // whatever cluster the wallet UI is pointed at — if the user left it on
-  // mainnet our devnet-blockhash tx would be rejected. Force the manual
-  // sign + broadcast path so `conn` (always devnet) is the broadcast route.
-  const forceManualBroadcast =
-    typeof window !== 'undefined' &&
-    window.__SOLGUARD_DEMO &&
-    !window.__SOLGUARD_DEMO_MOCK_WALLET;
-
-  if (
-    !forceManualBroadcast &&
-    typeof provider.signAndSendTransaction === 'function'
-  ) {
-    const { signature } = await provider.signAndSendTransaction(tx);
-    return signature;
-  }
   if (typeof provider.signTransaction === 'function') {
     const signed = await provider.signTransaction(tx);
     const sig = await conn.sendRawTransaction(signed.serialize(), {
       skipPreflight: false,
+      preflightCommitment: 'confirmed',
+      maxRetries: 5,
     });
     return sig;
+  }
+  // Last-resort compatibility path for wallets that can only sign + send.
+  // Confirmation below may still time out if the wallet broadcasts to a
+  // different cluster, so prefer signTransaction whenever it exists.
+  if (typeof provider.signAndSendTransaction === 'function') {
+    const { signature } = await provider.signAndSendTransaction(tx);
+    return signature;
   }
   throw new Error('Wallet does not support signing Solana transactions');
 }

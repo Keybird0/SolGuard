@@ -15,7 +15,8 @@
   padding: 0;
 }
 
-:root {
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
   /* Brand & surface */
   --bg: #0a0a0b;
@@ -48,6 +49,59 @@
   --radius-xl: 24px;
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
   --shadow-glow: 0 0 40px rgba(124, 58, 237, 0.25);
+
+  /* Theme-surface tints (sticky header backdrop, body radials, tooltips,
+     chip hover) are pulled out as vars so the light palette below can
+     override them without having to re-declare the elements. */
+  --bg-overlay: rgba(10, 10, 11, 0.75);
+  --bg-radial-1: rgba(124, 58, 237, 0.18);
+  --bg-radial-2: rgba(20, 241, 149, 0.12);
+  --chip-hover-bg: rgba(255, 255, 255, 0.06);
+  --chip-border: rgba(255, 255, 255, 0.12);
+  --tooltip-bg: #1a1a1d;
+  --tooltip-fg: #fff;
+}
+
+/* ============================================================
+ * Light theme (☀️ toggle). Brand purple / sol greens stay the
+ * same — only the neutral surfaces, text, borders, shadows and
+ * atmospheric gradients are flipped so contrast ratios stay
+ * readable (WCAG AA on body copy + badges).
+ * ============================================================ */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f7fb;
+  --surface: #ffffff;
+  --surface-2: #f2f3f8;
+  --surface-3: #e6e8f0;
+  --border: #dfe2ec;
+  --border-strong: #c4c8d6;
+  --text: #1a1c24;
+  --text-2: #545873;
+  --text-3: #7a7f93;
+
+  --brand-purple: #6d28d9;
+  --brand-purple-2: #7c3aed;
+  --brand-sol: #059669;
+  --brand-sol-2: #10b981;
+
+  --sev-critical: #dc2626;
+  --sev-high: #ea580c;
+  --sev-medium: #d97706;
+  --sev-low: #2563eb;
+  --sev-info: #64748b;
+  --sev-safe: #059669;
+
+  --shadow-lg: 0 8px 32px rgba(17, 24, 39, 0.12);
+  --shadow-glow: 0 0 40px rgba(124, 58, 237, 0.18);
+
+  --bg-overlay: rgba(247, 247, 251, 0.8);
+  --bg-radial-1: rgba(124, 58, 237, 0.1);
+  --bg-radial-2: rgba(16, 185, 129, 0.08);
+  --chip-hover-bg: rgba(17, 24, 39, 0.04);
+  --chip-border: rgba(17, 24, 39, 0.12);
+  --tooltip-bg: #1a1c24;
+  --tooltip-fg: #fff;
 }
 
 html {
@@ -63,9 +117,10 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-image:
-    radial-gradient(circle at 20% -10%, rgba(124, 58, 237, 0.18), transparent 45%),
-    radial-gradient(circle at 80% 110%, rgba(20, 241, 149, 0.12), transparent 45%);
+    radial-gradient(circle at 20% -10%, var(--bg-radial-1), transparent 45%),
+    radial-gradient(circle at 80% 110%, var(--bg-radial-2), transparent 45%);
   background-attachment: fixed;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 a {
@@ -88,7 +143,7 @@ pre,
   position: sticky;
   top: 0;
   z-index: 30;
-  background: rgba(10, 10, 11, 0.75);
+  background: var(--bg-overlay);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
@@ -157,6 +212,66 @@ pre,
 .cluster-chip.devnet {
   color: var(--brand-sol);
   border-color: rgba(20, 241, 149, 0.3);
+}
+
+/* Moon / sun theme toggle — sits between the GitHub link and the
+   cluster chip in the header nav. Icons overlap and cross-fade based
+   on `:root[data-theme]` so clicking immediately reflects state even
+   before the JS persists it to localStorage. */
+.theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+.theme-toggle:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  transform: rotate(-12deg);
+}
+.theme-toggle:active {
+  transform: rotate(-12deg) scale(0.95);
+}
+.theme-toggle .theme-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+/* dark mode → show the moon (turn off for light); light mode → sun */
+:root[data-theme='dark'] .theme-toggle .theme-icon-dark,
+:root:not([data-theme='light']) .theme-toggle .theme-icon-dark {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+:root[data-theme='dark'] .theme-toggle .theme-icon-light,
+:root:not([data-theme='light']) .theme-toggle .theme-icon-light {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.6);
+}
+:root[data-theme='light'] .theme-toggle .theme-icon-dark {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.6);
+}
+:root[data-theme='light'] .theme-toggle .theme-icon-light {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
 }
 
 main {
@@ -747,6 +862,31 @@ textarea.tf-input {
 }
 .kv-row .v.mono-lg {
   font-size: 0.88rem;
+}
+
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 10px auto 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #ffffff;
+  width: fit-content;
+  box-shadow: var(--shadow-sm);
+}
+.qr-wrap canvas {
+  display: block;
+  border-radius: 10px;
+}
+.qr-hint {
+  max-width: 420px;
+  margin: 0 auto 12px;
+  text-align: center;
+  line-height: 1.6;
+}
+#qr-pane {
+  text-align: center;
 }
 
 /* ============ Task list (Progress batch view) ============ */
@@ -1405,14 +1545,14 @@ textarea.tf-input {
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--chip-border);
   background: transparent;
   color: inherit;
   font: inherit;
   transition: background 0.15s ease;
 }
 .copy-chip:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--chip-hover-bg);
 }
 
 /* Tooltip-on-hover using the `data-tip` attribute. Pure CSS, no JS. */
@@ -1428,8 +1568,8 @@ textarea.tf-input {
   transform: translateX(-50%);
   white-space: nowrap;
   padding: 6px 10px;
-  background: #1a1a1d;
-  color: #fff;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-fg);
   font-size: 12px;
   border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);

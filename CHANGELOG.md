@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **定价下调 10×（0.01 SOL → 0.001 SOL / Target）**（2026-04-25）：把 `config.auditPriceSol` 默认值、`.env` / `.env.example`（根 + server 双份）、`docs/USAGE(.zh-CN).md`、`README(.zh-CN).md`（含 "~$2" → "~$0.20" / "~$0.2"）、`solguard-server/README.md`（env 表 + API 示例 paymentUrl/amountSol）、`docs/demo/script.md`（"0.01×3→0.03" 改 "0.001×3→0.003" + "three hundredths" → "thousandths"）、前端静态文案（`public/index.html` 7 处：hero chip / how-it-works desc / price-summary unit+total / pay pane sentence+amount+btn）、`public/app.js` State fallback、`public/demo-shim.js` `DEMO_AMOUNT` 全部同步到 0.001；测试 fixture (`src/routes/audit.test.ts` 2 处、`src/notify/lark.test.ts` 1 处) 的 `paymentAmountSol` 同步到 0.001。后端运行时价格由 `AUDIT_PRICE_SOL` env → config 统一注入，`/healthz.checks.auditPriceSol` 动态回传前端，零硬编码路径。
+
 ### Added
 - **Phase 6 · 测试与优化 Layer 1 推进**（2026-04-25，10/13 Task，M4 闸门 8/15 🟨）：
   - **Fixture 扩编**（`test-fixtures/real-world/` 12 份新增 + Phase 1 原 5 份 = 17 份）：Sealevel Attacks 衍生样本、Anchor examples 干净合约、Jupiter/Marinade/Metaplex 真实项目切片；每份带 SPDX + 来源注释；`test-fixtures/benchmark.yaml` 统一 `has_vuln + ground_truth + source/commit/license`；`scripts/validate_benchmarks.py` schema + 行号检查全绿。

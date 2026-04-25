@@ -41,7 +41,7 @@ See [.env.example](./.env.example) for the complete list. Highlights:
 | `FREE_AUDIT` | false | Skip Solana Pay (dev only) |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | LLM providers (at least one required) |
 | `SOLANA_CLUSTER` / `SOLANA_RPC_URL` / `SOLANA_SERVICE_WALLET` | devnet / … | Payment recipient |
-| `AUDIT_PRICE_SOL` | 0.01 | Price per audit |
+| `AUDIT_PRICE_SOL` | 0.001 | Price per audit |
 | `OH_CLI_PATH` | `oh` | OpenHarness CLI binary |
 | `OH_SKILL_DIR` | — | Path to `solana-security-audit-skill` |
 | `RUNNER_FALLBACK_TO_PYTHON` | true | If `oh` is missing / fails, run `run_audit.py` via subprocess |
@@ -84,10 +84,10 @@ Response (payment required):
 {
   "taskId": "<uuid>",
   "status": "paying",
-  "paymentUrl": "solana:<recipient>?amount=0.01&reference=…",
+  "paymentUrl": "solana:<recipient>?amount=0.001&reference=…",
   "paymentReference": "<base58>",
   "recipient": "<base58>",
-  "amountSol": 0.01,
+  "amountSol": 0.001,
   "cluster": "devnet",
   "expiresAt": "2026-04-22T…"
 }

@@ -23,8 +23,15 @@ import {
 } from '/wallet.js';
 import { payAudit } from '/payment.js';
 import {
+  buildSolanaPayURL,
+  renderQR,
+  watchDevnetPayment,
+} from '/payment-qr.js';
+import {
   renderMarkdown,
-  splitReportTabs,
+  buildRiskSummaryMd,
+  buildFullAssessmentMd,
+  buildChecklistMd,
   downloadBlob,
   ratingFromStats,
 } from '/report.js';
@@ -44,6 +51,8 @@ export const State = {
 
   // Polling / wallet / UI
   pollTimer: null,
+  reportRefreshTimer: null,
+  qrPaymentWatcher: null,
   elapsedTimer: null,
   elapsedStart: 0,
   walletAddr: null,
@@ -58,7 +67,7 @@ export const State = {
   paying: false,
   cluster: 'devnet',
   freeAudit: false,
-  auditPriceSol: 0.01,
+  auditPriceSol: 0.001,
 };
 
 // ============================================================
@@ -91,9 +100,20 @@ export const Router = {
     const hash = param
       ? `${section}/${encodeURIComponent(param)}`
       : section;
-    if (decodeURIComponent(location.hash.slice(1)) !== hash) {
+    const currentHash = decodeURIComponent(location.hash.slice(1));
+    if (currentHash !== hash) {
+      // Changing location.hash fires a 'hashchange' event which we already
+      // listen for and route through _activate(). Calling _activate here
+      // too would race two mounts — most visibly on localhost where the
+      // real backend's latency means the 2nd activation's DOM reset
+      // lands AFTER the 1st activation's hydrateReport has already
+      // written the report, wiping it back to "Loading…". Let the
+      // hashchange handler drive the single activation.
       location.hash = hash;
+      return;
     }
+    // Hash unchanged (e.g. first load via direct URL, or Router.go called
+    // with the current view) — activate manually since no event will fire.
     this._activate(section, params);
   },
 
@@ -109,12 +129,39 @@ export const Router = {
     }
     el.classList.remove('hidden');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    this._onLeave?.();
-    this._onLeave = this.onShow[section]?.(params) || null;
+    // Invoke previous section's cleanup, if any.
+    if (typeof this._onLeave === 'function') {
+      try { this._onLeave(); } catch (err) { console.warn('onLeave failed:', err); }
+    }
+    this._onLeave = null;
+    // onShow handlers may be async. For async handlers, await the cleanup
+    // fn they return (if any). Non-async handlers get their cleanup fn
+    // hooked immediately.
+    const ret = this.onShow[section]?.(params);
+    if (ret && typeof ret.then === 'function') {
+      ret.then((cleanup) => {
+        this._onLeave = typeof cleanup === 'function' ? cleanup : null;
+      }).catch((err) => {
+        console.warn('onShow failed:', err);
+      });
+    } else {
+      this._onLeave = typeof ret === 'function' ? ret : null;
+    }
   },
 
   parse() {
     const raw = location.hash.slice(1) || 'landing';
+    if (raw.includes('?')) {
+      const [section, query = ''] = raw.split('?');
+      const qs = new URLSearchParams(query);
+      const param =
+        qs.get('batchId') ||
+        qs.get('batch') ||
+        qs.get('taskId') ||
+        qs.get('task') ||
+        qs.get('id');
+      return { section: section || 'landing', param };
+    }
     const [section, ...rest] = raw.split('/');
     const param = rest.length ? decodeURIComponent(rest.join('/')) : null;
     return { section, param };
@@ -596,6 +643,7 @@ function renderBatchProgress(batch, tasks) {
   const failPane = document.getElementById('fail-pane');
 
   if (batch.status === 'failed') {
+    stopQrPaymentWatcher();
     payPane.hidden = true;
     auditPane.hidden = true;
     failPane.hidden = false;
@@ -645,6 +693,7 @@ function renderBatchProgress(batch, tasks) {
   }
 
   // batch.status === 'paid' — render per-task rows
+  stopQrPaymentWatcher();
   payPane.hidden = true;
   auditPane.hidden = false;
   failPane.hidden = true;
@@ -759,6 +808,38 @@ function stopPolling() {
   State.elapsedTimer = null;
 }
 
+function stopQrPaymentWatcher() {
+  State.qrPaymentWatcher?.stop?.();
+  State.qrPaymentWatcher = null;
+}
+
+function getPaymentParams() {
+  const batch = State.batch || {};
+  const batchId = batch.batchId || State.batchId;
+  const recipient = batch.paymentRecipient || batch.recipient;
+  const amountSol = batch.totalAmountSol ?? batch.amountSol;
+  const reference = batch.paymentReference;
+  if (!batchId || !recipient || !reference || !amountSol) {
+    throw new Error('Missing payment parameters from server');
+  }
+  const paymentUrl =
+    batch.paymentUrl ||
+    buildSolanaPayURL({
+      recipient,
+      amountSol,
+      reference,
+      batchId,
+    });
+  return {
+    batchId,
+    recipient,
+    amountSol,
+    reference,
+    paymentUrl,
+    expiresAt: batch.paymentExpiresAt || batch.expiresAt,
+  };
+}
+
 async function refreshWalletBalance() {
   if (!State.walletAddr) return;
   try {
@@ -809,16 +890,129 @@ function resetWalletUI() {
   document.getElementById('wallet-connected').hidden = true;
 }
 
+async function pushSignatureToServer(signature, opts = {}) {
+  const {
+    softFail = false,
+    successMessage = 'Payment verified. Audits starting…',
+    pendingMessage = 'Server still validating payment — audits will start shortly.',
+  } = opts;
+  if (!State.batch?.batchId) return false;
+  const resp = await api.pushBatchPayment(State.batch.batchId, signature);
+  if (resp?.ok) {
+    toast(successMessage, 'success');
+    State.batch = {
+      ...State.batch,
+      status: 'paid',
+      paymentSignature: signature,
+    };
+    return true;
+  }
+  if (softFail) {
+    toast(pendingMessage, 'info');
+    State.batch = {
+      ...State.batch,
+      status: 'paid',
+      paymentSignature: signature,
+    };
+  } else {
+    toast('Server could not verify: ' + (resp?.error || 'unknown'), 'error');
+  }
+  return false;
+}
+
+function restoreWalletPaymentPane() {
+  document.getElementById('qr-pane').hidden = true;
+  document.getElementById('wallet-disconnected').hidden = Boolean(State.walletAddr);
+  document.getElementById('wallet-connected').hidden = !State.walletAddr;
+}
+
+function hideQrPayment() {
+  stopQrPaymentWatcher();
+  restoreWalletPaymentPane();
+}
+
+async function showQrPayment(e) {
+  e?.preventDefault?.();
+  if (!State.batch) return toast('Payment request is not ready yet', 'info');
+
+  let params;
+  try {
+    params = getPaymentParams();
+  } catch (err) {
+    return toast(err.message, 'error');
+  }
+
+  stopQrPaymentWatcher();
+  document.getElementById('wallet-disconnected').hidden = true;
+  document.getElementById('wallet-connected').hidden = true;
+  document.getElementById('manual-sig-pane').hidden = true;
+  const pane = document.getElementById('qr-pane');
+  const status = document.getElementById('qr-status');
+  const canvas = document.getElementById('qr-canvas');
+  pane.hidden = false;
+  status.textContent = 'Preparing QR code…';
+  canvas.dataset.uri = params.paymentUrl;
+
+  try {
+    await renderQR(canvas, params.paymentUrl);
+    status.textContent =
+      'Scan with a Solana Pay-compatible mobile wallet. Waiting for the Devnet transaction…';
+  } catch (err) {
+    console.error(err);
+    status.textContent = 'Could not render QR code.';
+    toast(friendlyToast(err), 'error', 6000);
+    return;
+  }
+
+  try {
+    State.qrPaymentWatcher = watchDevnetPayment({
+      reference: params.reference,
+      recipient: params.recipient,
+      amountSol: params.amountSol,
+      expiresAt: params.expiresAt,
+      onFound(signature) {
+        status.textContent =
+          'Transaction found. Verifying amount, recipient, and reference…';
+        document.getElementById('tx-pending').hidden = false;
+        document.getElementById('tx-sig').textContent = shortAddr(signature);
+      },
+      async onValidated(signature) {
+        status.textContent = 'Payment verified on-chain. Starting audit…';
+        try {
+          await pushSignatureToServer(signature, {
+            successMessage: 'QR payment verified. Audits starting…',
+            softFail: false,
+          });
+          stopQrPaymentWatcher();
+          document.getElementById('tx-pending').hidden = true;
+        } catch (err) {
+          toast(friendlyToast(err), 'error', 6000);
+          status.textContent =
+            'On-chain payment found, but server verification failed. You can paste the signature manually.';
+        }
+      },
+      onError(err) {
+        console.warn('QR payment watcher failed:', err);
+        status.textContent =
+          'Still waiting for payment… If you already paid, keep this page open while Devnet confirms.';
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    toast(friendlyToast(err), 'error', 6000);
+    status.textContent = 'Could not start QR payment watcher.';
+  }
+}
+
 async function handlePay() {
   if (!State.batch || !State.walletProvider || !State.walletAddr) return;
   if (State.paying) return;
 
-  const batch = State.batch;
-  const recipient = batch.paymentRecipient;
-  const amountSol = batch.totalAmountSol;
-  const reference = batch.paymentReference;
-  if (!recipient || !reference || !amountSol) {
-    toast('Missing payment parameters from server', 'error');
+  let params;
+  try {
+    params = getPaymentParams();
+  } catch (err) {
+    toast(err.message, 'error');
     return;
   }
 
@@ -832,9 +1026,9 @@ async function handlePay() {
     const signature = await payAudit({
       provider: State.walletProvider,
       userPubkey: State.walletAddr,
-      recipient,
-      amountSol,
-      reference,
+      recipient: params.recipient,
+      amountSol: params.amountSol,
+      reference: params.reference,
       onSignatureBroadcast: (sig) => {
         btn.innerHTML = '<span class="spinner"></span> Waiting for confirmation…';
         document.getElementById('tx-pending').hidden = false;
@@ -844,15 +1038,7 @@ async function handlePay() {
 
     toast('Transaction confirmed. Verifying on server…', 'info');
     try {
-      const pushResp = await api.pushBatchPayment(batch.batchId, signature);
-      if (pushResp?.ok) {
-        toast('Payment verified. Audits starting…', 'success');
-      } else {
-        toast(
-          'Server still validating payment — audits will start shortly.',
-          'info',
-        );
-      }
+      await pushSignatureToServer(signature, { softFail: true });
     } catch (e) {
       console.warn('pushBatchPayment failed', e);
       toast(
@@ -860,13 +1046,6 @@ async function handlePay() {
         'info',
       );
     }
-
-    // Nudge UI to the in-flight view immediately; the poller will catch up.
-    State.batch = {
-      ...State.batch,
-      status: 'paid',
-      paymentSignature: signature,
-    };
   } catch (err) {
     console.error(err);
     toast(friendlyToast(err), 'error', 6000);
@@ -887,15 +1066,12 @@ async function handleManualSignature() {
   }
   if (!State.batch?.batchId) return;
   try {
-    const resp = await api.pushBatchPayment(State.batch.batchId, sig);
-    if (resp?.ok) {
-      toast('Signature accepted', 'success');
+    const ok = await pushSignatureToServer(sig, {
+      successMessage: 'Signature accepted',
+      softFail: false,
+    });
+    if (ok) {
       document.getElementById('manual-sig-pane').hidden = true;
-    } else {
-      toast(
-        'Server could not verify: ' + (resp?.error || 'unknown'),
-        'error',
-      );
     }
   } catch (e) {
     toast(friendlyToast(e), 'error', 6000);
@@ -953,16 +1129,24 @@ Router.onShow.progress = async (params) => {
   State.batchId = batchId;
 
   // Reset panes
+  stopQrPaymentWatcher();
   document.getElementById('wallet-disconnected').hidden = Boolean(State.walletAddr);
   document.getElementById('wallet-connected').hidden = !State.walletAddr;
+  document.getElementById('qr-pane').hidden = true;
   document.getElementById('tx-pending').hidden = true;
   document.getElementById('manual-sig-pane').hidden = true;
   document.getElementById('task-list').innerHTML = '';
 
   document.getElementById('btn-connect').onclick = handleConnectWallet;
   document.getElementById('btn-pay').onclick = handlePay;
+  document.querySelectorAll('.btn-show-qr').forEach((btn) => {
+    btn.onclick = showQrPayment;
+  });
+  document.getElementById('btn-hide-qr').onclick = hideQrPayment;
   document.getElementById('btn-manual-sig').onclick = (e) => {
     e.preventDefault();
+    stopQrPaymentWatcher();
+    restoreWalletPaymentPane();
     const pane = document.getElementById('manual-sig-pane');
     pane.hidden = !pane.hidden;
     if (!pane.hidden) {
@@ -997,7 +1181,10 @@ Router.onShow.progress = async (params) => {
   });
 
   startPolling(batchId);
-  return () => stopPolling();
+  return () => {
+    stopQrPaymentWatcher();
+    stopPolling();
+  };
 };
 
 // ============================================================
@@ -1011,7 +1198,7 @@ function setActiveTab(name) {
       t.classList.toggle('active', t.dataset.tab === name);
     });
   const body = document.getElementById('rep-body');
-  const tabs = State.reportTabs || splitReportTabs(State.reportRaw || '');
+  const tabs = State.reportTabs || { summary: '', assessment: '', checklist: '' };
   const md = tabs[name] || '';
   if (!md.trim()) {
     body.innerHTML =
@@ -1053,6 +1240,77 @@ function renderFindingsSidebar(findings) {
     });
     ul.appendChild(li);
   });
+}
+
+function buildFallbackMarkdown(task) {
+  // Used when both the /report/md endpoint and task.reportMarkdown are empty
+  // (e.g. callback delivered findings but runner couldn't produce assessment.md,
+  // or static Vercel mode where we only have findings/statistics). Produces a
+  // minimal Summary + Findings markdown so the report page isn't stuck on
+  // "This section is empty" while the data actually exists on the task.
+  const stats = task.statistics || {};
+  const findings = Array.isArray(task.findings) ? task.findings : [];
+  const order = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+  const sorted = [...findings].sort(
+    (a, b) => order.indexOf(a.severity) - order.indexOf(b.severity),
+  );
+  const total =
+    findings.length ||
+    (stats.critical ?? 0) +
+      (stats.high ?? 0) +
+      (stats.medium ?? 0) +
+      (stats.low ?? 0) +
+      (stats.info ?? 0);
+
+  const lines = ['# Summary', ''];
+  lines.push('> Rendered from task findings (assessment markdown unavailable).');
+  lines.push('');
+  lines.push(`- Total findings: **${total}**`);
+  lines.push(`- Critical: ${stats.critical ?? 0}`);
+  lines.push(`- High: ${stats.high ?? 0}`);
+  lines.push(`- Medium: ${stats.medium ?? 0}`);
+  lines.push(`- Low: ${stats.low ?? 0}`);
+  lines.push(`- Info: ${stats.info ?? 0}`);
+  lines.push('');
+  lines.push('# Findings');
+  lines.push('');
+  if (!sorted.length) {
+    lines.push('_No findings recorded for this target._');
+  } else {
+    for (const f of sorted) {
+      const sev = f.severity || 'Info';
+      const title = f.title || f.id || 'Untitled finding';
+      lines.push(`## ${title}`);
+      lines.push('');
+      lines.push(`- Severity: **${sev}**`);
+      if (f.location) lines.push(`- Location: \`${f.location}\``);
+      if (f.ruleId || f.id) lines.push(`- Rule: \`${f.ruleId || f.id}\``);
+      if (f.confidence) lines.push(`- Confidence: ${f.confidence}`);
+      lines.push('');
+      if (f.description) {
+        lines.push(f.description);
+        lines.push('');
+      }
+      if (f.impact) {
+        lines.push(`**Impact.** ${f.impact}`);
+        lines.push('');
+      }
+      if (f.recommendation) {
+        lines.push(`**Recommendation.** ${f.recommendation}`);
+        lines.push('');
+      }
+      if (Array.isArray(f.evidence) && f.evidence.length) {
+        lines.push('**Evidence.**');
+        lines.push('');
+        for (const ev of f.evidence) {
+          const text = typeof ev === 'string' ? ev : ev.snippet || ev.note || '';
+          if (text) lines.push(`- ${text}`);
+        }
+        lines.push('');
+      }
+    }
+  }
+  return lines.join('\n');
 }
 
 function slugify(s) {
@@ -1104,9 +1362,12 @@ function renderTargetTabs(tasks, activeTaskId) {
   });
 }
 
-async function hydrateTask(taskId) {
+async function hydrateTask(taskId, opts = {}) {
+  const { silent = false } = opts;
   const body = document.getElementById('rep-body');
-  body.innerHTML = '<p class="muted small">Loading report…</p>';
+  if (!silent) {
+    body.innerHTML = '<p class="muted small">Loading report…</p>';
+  }
   try {
     const [task, md] = await Promise.all([
       api.getTask(taskId),
@@ -1114,8 +1375,22 @@ async function hydrateTask(taskId) {
     ]);
     State.task = task;
     State.taskId = taskId;
-    State.reportRaw = md || task.reportMarkdown || '';
-    State.reportTabs = splitReportTabs(State.reportRaw);
+    let reportRaw = md || task.reportMarkdown || '';
+    if (!reportRaw.trim()) {
+      reportRaw = buildFallbackMarkdown(task);
+    }
+    State.reportRaw = reportRaw;
+    // Each tab is a purpose-built view, built from the normalized task
+    // payload (findings + statistics). We intentionally do NOT slice the
+    // backend markdown into tabs any more — section heading wording
+    // varies between skill versions ("Assessment" vs "Full Assessment"
+    // vs "Security Assessment"), which used to leave the middle tab
+    // blank. See report.js for the three builders.
+    State.reportTabs = {
+      summary: buildRiskSummaryMd(task),
+      assessment: buildFullAssessmentMd(task),
+      checklist: buildChecklistMd(task),
+    };
 
     const title = task.inputs?.[0]?.value
       ? 'Audit · ' + shortValue(task.inputs[0].value)
@@ -1149,7 +1424,21 @@ async function hydrateTask(taskId) {
   }
 }
 
-async function hydrateReport(batchId) {
+function taskHasReportPayload(task) {
+  if (!task || task.status !== 'completed') return false;
+  const stats = task.statistics || {};
+  const total =
+    (stats.critical ?? 0) +
+    (stats.high ?? 0) +
+    (stats.medium ?? 0) +
+    (stats.low ?? 0) +
+    (stats.info ?? 0);
+  const findingsCount = Array.isArray(task.findings) ? task.findings.length : 0;
+  return total > 0 || findingsCount > 0 || typeof stats.total === 'number';
+}
+
+async function hydrateReport(batchId, opts = {}) {
+  const { silent = false, keepTaskId = false } = opts;
   try {
     const { batch, tasks } = await api.getBatch(batchId);
     State.batchId = batchId;
@@ -1157,19 +1446,89 @@ async function hydrateReport(batchId) {
     State.tasksMap = new Map(tasks.map((t) => [t.taskId, t]));
 
     const completed = tasks.filter((t) => t.status === 'completed');
-    const first = completed[0] || tasks[0];
-    State.taskId = first?.taskId || null;
+    const anyInFlight = tasks.some(
+      (t) => t.status !== 'completed' && t.status !== 'failed',
+    );
+    const hasReadyReport = tasks.some(taskHasReportPayload);
+    const first = completed.find(taskHasReportPayload) || completed[0] || tasks[0];
+    const nextTaskId = keepTaskId && State.taskId ? State.taskId : first?.taskId;
+    State.taskId = nextTaskId || null;
     renderTargetTabs(tasks, State.taskId);
     if (State.taskId) {
-      await hydrateTask(State.taskId);
-    } else {
+      await hydrateTask(State.taskId, { silent });
+    } else if (!silent) {
       document.getElementById('rep-body').innerHTML =
         '<p class="muted small">No completed task to display yet.</p>';
     }
+    return {
+      batch,
+      tasks,
+      anyInFlight,
+      hasAnyCompleted: completed.length > 0,
+      hasReadyReport,
+    };
   } catch (err) {
     console.error(err);
-    document.getElementById('rep-body').innerHTML =
-      '<p class="error">Could not load batch: ' + escapeHtml(err.message) + '</p>';
+    if (!silent) {
+      document.getElementById('rep-body').innerHTML =
+        '<p class="error">Could not load batch: ' + escapeHtml(err.message) + '</p>';
+    }
+    return {
+      anyInFlight: false,
+      hasAnyCompleted: false,
+      hasReadyReport: false,
+      error: err,
+    };
+  }
+}
+
+function startReportAutoRefresh(batchId) {
+  stopReportAutoRefresh();
+  // Silently re-hydrates the report every 1.2s (≤ ~48s) so long as the
+  // batch is still in flight, or has completed tasks whose report payload
+  // (statistics / findings) has not yet been persisted. Uses `silent: true`
+  // so hydrateTask does NOT overwrite the DOM with the "Loading report…"
+  // placeholder between polls — we only re-paint once fresher data is
+  // available, which eliminates the flicker the user reported.
+  let attempts = 0;
+  const MAX_ATTEMPTS = 40;
+  State.reportRefreshTimer = setInterval(async () => {
+    attempts += 1;
+    if (attempts > MAX_ATTEMPTS || State.batchId !== batchId) {
+      stopReportAutoRefresh();
+      return;
+    }
+    let resp;
+    try {
+      resp = await api.getBatch(batchId);
+    } catch (err) {
+      console.warn('report auto-refresh failed:', err);
+      return;
+    }
+    const tasks = resp?.tasks || [];
+    const hasReady = tasks.some(taskHasReportPayload);
+    const anyInFlight = tasks.some(
+      (t) => t.status !== 'completed' && t.status !== 'failed',
+    );
+    if (hasReady) {
+      // We have real numbers — do one silent hydrate and stop. The UI will
+      // swap to the rendered report without any "Loading…" interstitial.
+      await hydrateReport(batchId, { silent: true, keepTaskId: true });
+      stopReportAutoRefresh();
+      return;
+    }
+    if (!anyInFlight) {
+      // All tasks are terminal but none produced a report payload (e.g. all
+      // failed). Stop polling — leave the current DOM alone.
+      stopReportAutoRefresh();
+    }
+  }, 1200);
+}
+
+function stopReportAutoRefresh() {
+  if (State.reportRefreshTimer) {
+    clearInterval(State.reportRefreshTimer);
+    State.reportRefreshTimer = null;
   }
 }
 
@@ -1178,6 +1537,29 @@ Router.onShow.report = async (params) => {
   if (!param) {
     Router.go('landing');
     return null;
+  }
+
+  // Immediately reset the report DOM to a loading state so that stale
+  // text from the <section> markup (or from a previous batch) never leaks
+  // into the new report view. Without this, users arriving from a fresh
+  // scan used to see the hard-coded "Loading…" placeholder from
+  // index.html even though State had been cleared — leading to the
+  // "blank report, must refresh" class of bugs.
+  const body0 = document.getElementById('rep-body');
+  if (body0) body0.innerHTML = '<p class="muted small">Loading report…</p>';
+  document.getElementById('rep-title').textContent = 'Loading report…';
+  document.getElementById('rep-taskid').textContent = '—';
+  document.getElementById('rep-completed').textContent = '—';
+  ['count-critical', 'count-high', 'count-medium', 'count-low', 'count-info'].forEach(
+    (id) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '0';
+    },
+  );
+  const ratingEl0 = document.getElementById('rep-rating');
+  if (ratingEl0) {
+    ratingEl0.textContent = '?';
+    ratingEl0.className = 'rating rating-U';
   }
 
   const resolved = await resolveBatchParam(param, 'report');
@@ -1195,19 +1577,29 @@ Router.onShow.report = async (params) => {
   document.querySelectorAll('#section-report .report-tabs .tab').forEach((t) => {
     t.onclick = () => setActiveTab(t.dataset.tab);
   });
-  document.getElementById('btn-dl-md').onclick = async () => {
+  document.getElementById('btn-dl-md').onclick = () => {
     const id = State.taskId;
     if (!id) return toast('No Target selected', 'info');
-    try {
-      const md = State.reportRaw || (await fetchReportMd(id));
-      downloadBlob({
-        text: md,
-        filename: `solguard-${id}.md`,
-        mime: 'text/markdown;charset=utf-8',
-      });
-    } catch {
-      toast('Could not download markdown', 'error');
-    }
+    const tab = State.currentTab || 'summary';
+    const tabs = State.reportTabs || {};
+    // Prefer the currently-viewed tab's markdown so the file the user
+    // downloads matches what they see. If the tab is somehow empty
+    // (e.g. no findings), fall back to the raw assembled report so they
+    // still get *something*. The filename suffix mirrors the tab name
+    // so all three reports end up as distinct files on disk.
+    const md = (tabs[tab] && tabs[tab].trim()) || State.reportRaw || '';
+    if (!md) return toast('Report not ready yet', 'info');
+    const suffixByTab = {
+      summary: 'risk-summary',
+      assessment: 'full-assessment',
+      checklist: 'checklist',
+    };
+    const suffix = suffixByTab[tab] || 'report';
+    downloadBlob({
+      text: md,
+      filename: `solguard-${id}-${suffix}.md`,
+      mime: 'text/markdown;charset=utf-8',
+    });
   };
   document.getElementById('btn-dl-json').onclick = async () => {
     const id = State.taskId;
@@ -1225,8 +1617,15 @@ Router.onShow.report = async (params) => {
   };
   document.getElementById('btn-print').onclick = () => window.print();
 
-  hydrateReport(batchId);
-  return null;
+  const initial = await hydrateReport(batchId);
+  // Kick off auto-refresh whenever the first render landed without real
+  // numbers — either because some tasks are still running, or because a
+  // task is flagged "completed" but the report payload (statistics /
+  // findings) has not yet been persisted by the backend callback.
+  if (!initial.hasReadyReport) {
+    startReportAutoRefresh(batchId);
+  }
+  return () => stopReportAutoRefresh();
 };
 
 // ============================================================
@@ -1308,7 +1707,77 @@ Router.onShow.landing = () => null;
 // ============================================================
 // Bootstrap
 // ============================================================
+// ============================================================
+// Theme toggle (🌙 / ☀️)
+// ------------------------------------------------------------
+// The pre-paint inline <script> in index.html already sets
+// `document.documentElement.dataset.theme` from localStorage or
+// `prefers-color-scheme`, so the first paint is already correct.
+// Here we just wire the button click + persistence + a small
+// nicety: if the user hasn't explicitly chosen, we keep syncing
+// with the OS setting on the fly.
+// ============================================================
+const THEME_KEY = 'solguard:theme';
+
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    meta.setAttribute('content', t === 'light' ? '#f7f7fb' : '#0a0a0b');
+  }
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    const next = t === 'light' ? 'dark' : 'light';
+    btn.setAttribute(
+      'aria-label',
+      `Switch to ${next} theme (current: ${t})`,
+    );
+    btn.setAttribute('aria-pressed', String(t === 'light'));
+  }
+}
+
+function initThemeToggle() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+
+  applyTheme(document.documentElement.dataset.theme || 'dark');
+
+  btn.addEventListener('click', () => {
+    const current =
+      document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+    const next = current === 'light' ? 'dark' : 'light';
+    applyTheme(next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* private mode / quota — non-fatal */
+    }
+  });
+
+  // If the user never explicitly clicked the toggle, keep following
+  // the OS setting. Once they click, the stored value wins.
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const onChange = (e) => {
+      let stored = null;
+      try {
+        stored = localStorage.getItem(THEME_KEY);
+      } catch {
+        /* ignore */
+      }
+      if (stored !== 'light' && stored !== 'dark') {
+        applyTheme(e.matches ? 'light' : 'dark');
+      }
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange); // Safari < 14
+  }
+}
+
 async function bootstrap() {
+  initThemeToggle();
+
   // health → pick up FREE_AUDIT + cluster + price to tweak UI
   try {
     const h = await api.health();

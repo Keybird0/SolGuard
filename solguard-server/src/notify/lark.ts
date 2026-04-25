@@ -149,7 +149,8 @@ function explorerLink(signature: string, cluster: string): string {
 }
 
 function reportLink(task: AuditTask, cfg: LarkRuntimeConfig): string {
-  return task.reportUrl ?? `${cfg.frontendUrl}/#report?taskId=${task.taskId}`;
+  const id = task.batchId ?? task.taskId;
+  return task.reportUrl ?? `${cfg.frontendUrl}/#report/${encodeURIComponent(id)}`;
 }
 
 function duration(task: AuditTask): string {

@@ -21,11 +21,11 @@
 Professional Solana security audits cost **$50,000+** and take **2–4 weeks**.
 **90%+ of small-to-medium projects** can't afford them — yet ship code that holds real user funds.
 
-**SolGuard is a low-cost, open-source AI security auditor** that turns any GitHub URL / on-chain program address / whitepaper into a professional-grade risk report in **under 5 minutes** for **0.01 SOL per target** (roughly $2).
+**SolGuard is a low-cost, open-source AI security auditor** that turns any GitHub URL / on-chain program address / whitepaper into a professional-grade risk report in **under 5 minutes** for **0.001 SOL per target** (roughly $0.20).
 
 | | Pro Audit | SolGuard |
 |---|---|---|
-| Cost | $50,000+ | 0.01 SOL (~$2) per target |
+| Cost | $50,000+ | 0.001 SOL (~$0.20) per target |
 | Turnaround | 2–4 weeks | < 5 min |
 | Coverage | Deep, human | 7 deterministic rules + AI cross-validation |
 | Availability | Booking required | 24/7 self-serve |

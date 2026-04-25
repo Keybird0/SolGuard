@@ -42,16 +42,35 @@ describe('email rendering', () => {
     assert.ok(text.includes('1C / 0H'));
   });
 
-  it('sendMail is called via mailer stub', async () => {
-    const calls: { to?: string; subject?: string }[] = [];
+  it('sendMail is called via mailer stub with three report attachments', async () => {
+    const calls: { to?: string; subject?: string; attachments?: unknown[] }[] = [];
     setMailerForTesting({
       sendMail: async (opts) => {
-        calls.push({ to: String(opts.to), subject: opts.subject });
+        calls.push({
+          to: String(opts.to),
+          subject: opts.subject,
+          attachments: opts.attachments as unknown[],
+        });
         return { ok: true };
       },
     });
     await enqueueAuditEmail(sampleCompleted());
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.to, 'u@example.com');
+    const attachments = calls[0]?.attachments as
+      | Array<{ filename?: string; content?: Buffer }>
+      | undefined;
+    assert.equal(attachments?.length, 3);
+    assert.deepEqual(
+      attachments?.map((item) => item.filename),
+      [
+        'solguard-e1-risk-summary.md',
+        'solguard-e1-full-assessment.md',
+        'solguard-e1-checklist-result.md',
+      ],
+    );
+    assert.match(String(attachments?.[0]?.content), /Risk Summary/);
+    assert.match(String(attachments?.[1]?.content), /Full Assessment/);
+    assert.match(String(attachments?.[2]?.content), /Checklist Result/);
   });
 });

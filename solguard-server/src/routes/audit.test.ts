@@ -241,7 +241,7 @@ describe('POST /api/audit/:taskId/payment', () => {
       status: 'paying',
       paymentReference: 'Ref111111111111111111111111111111111111111',
       paymentRecipient: 'Rcpt11111111111111111111111111111111111111',
-      paymentAmountSol: 0.01,
+      paymentAmountSol: 0.001,
       createdAt: now,
       updatedAt: now,
     });
@@ -267,7 +267,7 @@ describe('POST /api/audit/:taskId/payment', () => {
       status: 'paying',
       paymentReference: 'Ref111111111111111111111111111111111111111',
       paymentRecipient: 'Rcpt11111111111111111111111111111111111111',
-      paymentAmountSol: 0.01,
+      paymentAmountSol: 0.001,
       createdAt: now,
       updatedAt: now,
     });

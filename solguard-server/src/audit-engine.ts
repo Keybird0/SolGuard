@@ -262,12 +262,20 @@ class DefaultAuditEngine implements AuditEngine {
           lastError = `Runner timed out after ${config.agentTimeoutMs} ms`;
           lastErrorKind = usePython ? 'python_failed' : 'oh_timeout';
         } else if (result.exitCode === 0) {
-          logStream?.end();
           const current = await this.store.get(taskId);
           if (current && current.status !== 'completed' && current.status !== 'failed') {
-            await this.fallbackCallback(taskId, result.finalResult);
+            const applied = await this.fallbackCallback(taskId, result.finalResult);
+            if (!applied) {
+              lastError = 'Agent exited without producing a final result';
+              lastErrorKind = usePython ? 'python_failed' : 'oh_nonzero';
+            } else {
+              logStream?.end();
+              return;
+            }
+          } else {
+            logStream?.end();
+            return;
           }
-          return;
         } else {
           lastError = `runner exited with code ${result.exitCode}: ${result.stderr.slice(-400)}`;
           lastErrorKind = usePython ? 'python_failed' : 'oh_nonzero';
@@ -348,7 +356,7 @@ class DefaultAuditEngine implements AuditEngine {
     }
   }
 
-  private async fallbackCallback(taskId: string, finalResult: unknown): Promise<void> {
+  private async fallbackCallback(taskId: string, finalResult: unknown): Promise<boolean> {
     logger.info({ taskId }, 'agent exited 0 but no HTTP callback received; using stdout fallback');
     try {
       if (finalResult && typeof finalResult === 'object') {
@@ -361,15 +369,13 @@ class DefaultAuditEngine implements AuditEngine {
           },
           body: JSON.stringify({ status: 'completed', ...finalResult }),
         });
+        return true;
       } else {
-        await this.store.update(taskId, {
-          status: 'failed',
-          error: 'Agent exited without producing a final result',
-          completedAt: new Date().toISOString(),
-        });
+        return false;
       }
     } catch (err) {
       logger.error({ err, taskId }, 'fallbackCallback failed');
+      return false;
     }
   }
 

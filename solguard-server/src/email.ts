@@ -43,15 +43,117 @@ const SEVERITY_COLOR: Record<Severity, string> = {
   Info: '#95a5a6',
 };
 
+const SEVERITY_ORDER: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+
+const KNOWN_RULES: Array<{
+  id: string;
+  name: string;
+  category: string;
+  aliases?: string[];
+}> = [
+  {
+    id: 'missing_signer_check',
+    name: 'Missing Signer Check',
+    category: 'Authorization',
+    aliases: ['signer_check', 'missing_signer'],
+  },
+  {
+    id: 'missing_owner_check',
+    name: 'Missing Owner Check',
+    category: 'Account Validation',
+    aliases: ['owner_check', 'missing_owner'],
+  },
+  {
+    id: 'account_data_matching',
+    name: 'Account Data Matching',
+    category: 'Account Validation',
+    aliases: ['account_matching', 'data_matching'],
+  },
+  {
+    id: 'type_cosplay',
+    name: 'Type Cosplay / Discriminator',
+    category: 'Account Validation',
+    aliases: ['discriminator_check', 'type_confusion'],
+  },
+  {
+    id: 'arbitrary_cpi',
+    name: 'Arbitrary CPI',
+    category: 'CPI Safety',
+    aliases: ['arbitrary_cross_program_invocation', 'cpi_whitelist'],
+  },
+  {
+    id: 'pda_derivation_error',
+    name: 'PDA Derivation / Bump Seed',
+    category: 'PDA Safety',
+    aliases: ['pda_derivation', 'bump_seed', 'bump_seed_canonicalization'],
+  },
+  {
+    id: 'pda_sharing',
+    name: 'PDA Sharing / Seed Collision',
+    category: 'PDA Safety',
+    aliases: ['seed_collision'],
+  },
+  {
+    id: 'duplicate_mutable_accounts',
+    name: 'Duplicate Mutable Accounts',
+    category: 'Account Validation',
+    aliases: ['duplicate_accounts'],
+  },
+  {
+    id: 'closing_account_error',
+    name: 'Closing Account Error',
+    category: 'Lifecycle',
+    aliases: ['closing_account', 'unsafe_close'],
+  },
+  {
+    id: 'sysvar_spoofing',
+    name: 'Sysvar Address Check',
+    category: 'Account Validation',
+    aliases: ['sysvar_check', 'sysvar_address_checking'],
+  },
+  {
+    id: 'uninitialized_account',
+    name: 'Uninitialized Account',
+    category: 'Lifecycle',
+    aliases: ['init_check'],
+  },
+  {
+    id: 'reinit_attack',
+    name: 'Re-init Attack',
+    category: 'Lifecycle',
+    aliases: ['reinitialization'],
+  },
+  {
+    id: 'integer_overflow',
+    name: 'Integer Overflow / Underflow',
+    category: 'Arithmetic',
+    aliases: ['arithmetic_overflow', 'unchecked_math'],
+  },
+  {
+    id: 'semgrep_assets',
+    name: 'Semgrep Solana Rules',
+    category: 'Pattern Scanners',
+    aliases: ['semgrep', 'solana_manual_accountinfo_deserialize'],
+  },
+];
+
+const CATEGORY_ORDER = [
+  'Authorization',
+  'Account Validation',
+  'CPI Safety',
+  'PDA Safety',
+  'Lifecycle',
+  'Arithmetic',
+  'Pattern Scanners',
+  'Additional Checks',
+];
+
 function sortBySeverity(findings: Finding[]): Finding[] {
-  const order: Record<Severity, number> = {
-    Critical: 0,
-    High: 1,
-    Medium: 2,
-    Low: 3,
-    Info: 4,
-  };
-  return [...findings].sort((a, b) => order[a.severity] - order[b.severity]);
+  return [...findings].sort(
+    (a, b) =>
+      SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) ||
+      a.location.localeCompare(b.location),
+  );
 }
 
 function renderTopFindings(findings: Finding[]): string {
@@ -83,19 +185,303 @@ function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeRuleId(ruleId: string | undefined): string {
+  return String(ruleId ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function matchKnownRule(ruleId: string | undefined): (typeof KNOWN_RULES)[number] | null {
+  const norm = normalizeRuleId(ruleId);
+  if (!norm) return null;
+  for (const rule of KNOWN_RULES) {
+    if (norm === rule.id) return rule;
+  }
+  for (const rule of KNOWN_RULES) {
+    if (norm.startsWith(rule.id + '_') || norm.endsWith('_' + rule.id)) {
+      return rule;
+    }
+  }
+  for (const rule of KNOWN_RULES) {
+    if (
+      rule.aliases?.some(
+        (alias) =>
+          norm === alias ||
+          norm.startsWith(alias + '_') ||
+          norm.endsWith('_' + alias),
+      )
+    ) {
+      return rule;
+    }
+  }
+  return null;
+}
+
+function ratingFromStats(task: AuditTask): string {
+  const stats = task.statistics;
+  if (!stats) return 'U';
+  if ((stats.critical ?? 0) > 0) return 'D';
+  if ((stats.high ?? 0) > 0) return 'C';
+  if ((stats.medium ?? 0) > 2) return 'C';
+  if ((stats.medium ?? 0) > 0) return 'B';
+  if ((stats.low ?? 0) > 0) return 'A';
+  return 'S';
+}
+
+function totalFindings(task: AuditTask): number {
+  return (
+    task.findings?.length ??
+    task.statistics?.total ??
+    ((task.statistics?.critical ?? 0) +
+      (task.statistics?.high ?? 0) +
+      (task.statistics?.medium ?? 0) +
+      (task.statistics?.low ?? 0) +
+      (task.statistics?.info ?? 0))
+  );
+}
+
+function targetName(task: AuditTask): string {
+  return task.inputs[0]?.value ?? task.taskId;
+}
+
+function buildRiskSummaryMarkdown(task: AuditTask): string {
+  const stats = task.statistics;
+  const findings = sortBySeverity(task.findings ?? []);
+  const top = findings.slice(0, 5);
+  const lines: string[] = [
+    '# Risk Summary',
+    '',
+    `- Audit target: ${targetName(task)}`,
+    `- Overall rating: ${ratingFromStats(task)}`,
+    `- Completed: ${task.completedAt ?? '—'}`,
+    `- Total findings: ${totalFindings(task)}`,
+    '',
+    '## At-a-glance',
+    '',
+    '| Severity | Count |',
+    '| --- | ---: |',
+  ];
+
+  for (const severity of SEVERITY_ORDER) {
+    const key = severity.toLowerCase() as keyof NonNullable<AuditTask['statistics']>;
+    lines.push(`| ${severity} | ${stats?.[key] ?? 0} |`);
+  }
+  lines.push(`| Total | ${totalFindings(task)} |`, '');
+
+  lines.push('## Top risks');
+  lines.push('');
+  if (top.length === 0) {
+    lines.push('_No findings recorded._', '');
+  } else {
+    top.forEach((finding, index) => {
+      const oneLine = (finding.description || finding.impact || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+      lines.push(
+        `${index + 1}. [${finding.severity}] ${finding.title} — \`${finding.location}\``,
+      );
+      if (oneLine) lines.push(`   ${oneLine}${oneLine.length >= 220 ? '...' : ''}`);
+      lines.push('');
+    });
+  }
+
+  lines.push('## What this means');
+  lines.push('');
+  if ((stats?.critical ?? 0) > 0) {
+    lines.push('- Critical findings require immediate remediation before production use.');
+  }
+  if ((stats?.high ?? 0) > 0) {
+    lines.push('- High findings can bypass authorization or account validation assumptions.');
+  }
+  if ((stats?.medium ?? 0) > 0) {
+    lines.push('- Medium findings should be scheduled for remediation and regression tests.');
+  }
+  if (totalFindings(task) === 0) {
+    lines.push('- No findings were raised by the audit pipeline.');
+  }
+  lines.push('');
+  lines.push(
+    'Open the Full Assessment for detailed evidence and remediation. Open the Checklist Result for coverage proof.',
+  );
+  return lines.join('\n');
+}
+
+function buildFullAssessmentMarkdown(task: AuditTask): string {
+  const findings = sortBySeverity(task.findings ?? []);
+  const stats = task.statistics;
+  const lines: string[] = [
+    '# Full Assessment',
+    '',
+    `- Audit target: ${targetName(task)}`,
+    `- Overall rating: ${ratingFromStats(task)}`,
+    `- Completed: ${task.completedAt ?? '—'}`,
+    `- Breakdown: ${stats?.critical ?? 0} critical · ${stats?.high ?? 0} high · ${stats?.medium ?? 0} medium · ${stats?.low ?? 0} low · ${stats?.info ?? 0} info`,
+    `- Total findings: ${totalFindings(task)}`,
+    '',
+    '## Findings',
+    '',
+  ];
+
+  if (findings.length === 0) {
+    lines.push('_No findings recorded for this target._');
+    return lines.join('\n');
+  }
+
+  findings.forEach((finding, index) => {
+    lines.push(`### ${index + 1}. [${finding.severity}] ${finding.title}`);
+    lines.push('');
+    lines.push(`- Rule: \`${finding.ruleId ?? finding.id}\``);
+    lines.push(`- Location: \`${finding.location}\``);
+    if (typeof finding.confidence === 'number') {
+      lines.push(`- Confidence: ${finding.confidence.toFixed(2)}`);
+    }
+    lines.push('');
+    lines.push('**Description.**');
+    lines.push('');
+    lines.push(finding.description || 'No description provided.');
+    lines.push('');
+    if (finding.impact && finding.impact !== finding.description) {
+      lines.push('**Impact.**');
+      lines.push('');
+      lines.push(finding.impact);
+      lines.push('');
+    }
+    lines.push('**Recommendation.**');
+    lines.push('');
+    lines.push(finding.recommendation || 'No recommendation provided.');
+    lines.push('');
+    if (finding.codeSnippet) {
+      lines.push('**Code.**');
+      lines.push('');
+      lines.push('```rust');
+      lines.push(finding.codeSnippet);
+      lines.push('```');
+      lines.push('');
+    }
+    lines.push('---', '');
+  });
+
+  return lines.join('\n');
+}
+
+function buildChecklistMarkdown(task: AuditTask): string {
+  const bucket = new Map<
+    string,
+    {
+      rule: { id: string; name: string; category: string };
+      matches: Array<{ severity: Severity; title: string; location: string }>;
+    }
+  >();
+
+  for (const rule of KNOWN_RULES) {
+    bucket.set(`known:${rule.id}`, { rule, matches: [] });
+  }
+
+  for (const finding of task.findings ?? []) {
+    const known = matchKnownRule(finding.ruleId ?? finding.id);
+    if (known) {
+      bucket.get(`known:${known.id}`)?.matches.push({
+        severity: finding.severity,
+        title: finding.title,
+        location: finding.location,
+      });
+      continue;
+    }
+    const normalized = normalizeRuleId(finding.ruleId ?? finding.id) || finding.id;
+    const key = `extra:${normalized}`;
+    if (!bucket.has(key)) {
+      bucket.set(key, {
+        rule: {
+          id: normalized,
+          name: finding.title,
+          category: 'Additional Checks',
+        },
+        matches: [],
+      });
+    }
+    bucket.get(key)?.matches.push({
+      severity: finding.severity,
+      title: finding.title,
+      location: finding.location,
+    });
+  }
+
+  const byCategory = new Map<string, Array<(typeof bucket extends Map<string, infer V> ? V : never)>>();
+  for (const entry of bucket.values()) {
+    const category = entry.rule.category;
+    byCategory.set(category, [...(byCategory.get(category) ?? []), entry]);
+  }
+
+  const totalRules = bucket.size;
+  const hitRules = [...bucket.values()].filter((entry) => entry.matches.length > 0).length;
+  const lines: string[] = [
+    '# Checklist Result',
+    '',
+    `- Audit target: ${targetName(task)}`,
+    `- Completed: ${task.completedAt ?? '—'}`,
+    `- Coverage: ${totalRules} rule classes checked · ${hitRules} with findings · ${totalRules - hitRules} clean`,
+    `- Matched findings: ${task.findings?.length ?? 0}`,
+    '',
+    'Legend: finding detected / clean — no match.',
+    '',
+  ];
+
+  const categories = [
+    ...CATEGORY_ORDER.filter((category) => byCategory.has(category)),
+    ...[...byCategory.keys()].filter((category) => !CATEGORY_ORDER.includes(category)),
+  ];
+
+  for (const category of categories) {
+    const entries = byCategory.get(category) ?? [];
+    if (entries.length === 0) continue;
+    entries.sort((a, b) => b.matches.length - a.matches.length || a.rule.name.localeCompare(b.rule.name));
+    lines.push(`## ${category}`, '');
+    for (const entry of entries) {
+      const label =
+        entry.matches.length > 0
+          ? `${entry.matches.length} finding${entry.matches.length === 1 ? '' : 's'}`
+          : 'clean — no match';
+      lines.push(`- ${entry.rule.name} (\`${entry.rule.id}\`) — ${label}`);
+      for (const match of sortBySeverity(
+        entry.matches.map((item, index) => ({
+          id: `${entry.rule.id}-${index}`,
+          ruleId: entry.rule.id,
+          severity: item.severity,
+          title: item.title,
+          location: item.location,
+          description: '',
+          impact: '',
+          recommendation: '',
+        })),
+      )) {
+        lines.push(`  - [${match.severity}] ${match.title} @ \`${match.location}\``);
+      }
+    }
+    lines.push('');
+  }
+
+  lines.push(
+    `Coverage summary: ${totalRules} canonical rule classes were evaluated; ${hitRules} triggered and ${totalRules - hitRules} came back clean.`,
+  );
+  return lines.join('\n');
+}
+
 /**
  * Public report URL for a task. Prefers `task.reportUrl` (agent-supplied),
  * otherwise falls back to the Phase-4 frontend hash route so the link
  * resolves even when we only host the SPA at `PUBLIC_BASE_URL`.
  */
 function publicReportUrl(task: AuditTask): string {
+  const id = task.batchId ?? task.taskId;
   return (
-    task.reportUrl ?? `${config.publicBaseUrl}/#report?taskId=${task.taskId}`
+    task.reportUrl ?? `${config.publicBaseUrl}/#report/${encodeURIComponent(id)}`
   );
 }
 
 function publicFeedbackUrl(task: AuditTask): string {
-  return `${config.publicBaseUrl}/#feedback?taskId=${task.taskId}`;
+  return `${config.publicBaseUrl}/#feedback/${encodeURIComponent(task.taskId)}`;
 }
 
 function renderCompletedEmail(task: AuditTask): {
@@ -135,7 +521,7 @@ function renderCompletedEmail(task: AuditTask): {
     <a href="${feedbackUrl}" style="display:inline-block;margin-left:12px;padding:12px 20px;color:#7c5cff;text-decoration:none;border:1px solid #7c5cff;border-radius:6px">Share feedback</a>
   </div>
 
-  <p style="color:#999;font-size:12px;margin-top:32px">Two attachments are included: the Markdown report and a JSON summary with all findings + metadata.</p>
+  <p style="color:#999;font-size:12px;margin-top:32px">Three Markdown attachments are included: Risk Summary, Full Assessment, and Checklist Result.</p>
   <p style="color:#999;font-size:12px;margin-top:4px">— SolGuard · Solana security audit agent</p>
 </div>`.trim();
 
@@ -146,7 +532,7 @@ function renderCompletedEmail(task: AuditTask): {
     `Findings: ${riskBadge}\n` +
     `Full report: ${reportUrl}\n` +
     `Feedback: ${feedbackUrl}\n\n` +
-    `Attachments: solguard-${task.taskId}.md, solguard-${task.taskId}.json\n`;
+    `Attachments: solguard-${task.taskId}-risk-summary.md, solguard-${task.taskId}-full-assessment.md, solguard-${task.taskId}-checklist-result.md\n`;
 
   return { subject, html, text };
 }
@@ -224,28 +610,24 @@ export async function enqueueAuditEmail(task: AuditTask): Promise<void> {
 
 function buildAttachments(task: AuditTask): Mail.Attachment[] {
   const out: Mail.Attachment[] = [];
-  if (task.reportMarkdown) {
-    out.push({
-      filename: `solguard-${task.taskId}.md`,
-      content: Buffer.from(task.reportMarkdown, 'utf8'),
-      contentType: 'text/markdown',
-    });
-  }
   if (task.status === 'completed') {
-    const json = {
-      taskId: task.taskId,
-      status: task.status,
-      statistics: task.statistics,
-      findings: task.findings ?? [],
-      reportUrl: publicReportUrl(task),
-      completedAt: task.completedAt,
-      inputs: task.inputs,
-    };
-    out.push({
-      filename: `solguard-${task.taskId}.json`,
-      content: Buffer.from(JSON.stringify(json, null, 2), 'utf8'),
-      contentType: 'application/json',
-    });
+    out.push(
+      {
+        filename: `solguard-${task.taskId}-risk-summary.md`,
+        content: Buffer.from(buildRiskSummaryMarkdown(task), 'utf8'),
+        contentType: 'text/markdown',
+      },
+      {
+        filename: `solguard-${task.taskId}-full-assessment.md`,
+        content: Buffer.from(buildFullAssessmentMarkdown(task), 'utf8'),
+        contentType: 'text/markdown',
+      },
+      {
+        filename: `solguard-${task.taskId}-checklist-result.md`,
+        content: Buffer.from(buildChecklistMarkdown(task), 'utf8'),
+        contentType: 'text/markdown',
+      },
+    );
   }
   return out;
 }

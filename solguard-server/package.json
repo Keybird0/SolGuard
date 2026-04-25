@@ -7,7 +7,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "DOTENV_CONFIG_OVERRIDE=true tsx watch src/server.ts",
     "build": "tsc",
     "postbuild": "node -e \"require('fs').copyFileSync('openapi.yaml','public/openapi.yaml')\"",
     "start": "node dist/server.js",

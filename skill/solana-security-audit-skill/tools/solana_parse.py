@@ -102,9 +102,30 @@ def _strip_comments(src: str) -> str:
                 in_str = False
             i += 1
             continue
-        if ch == '"' or ch == "'":
+        if ch == '"':
             in_str = True
             str_quote = ch
+            i += 1
+            continue
+        if ch == "'":
+            # Distinguish Rust char literal (`'x'`, `'\n'`, `'\u{1F600}'`)
+            # from a lifetime (`'info`, `'static`). Char literals always
+            # have a closing ``'`` within ~6 chars; lifetimes never do on
+            # the same line. Without this check, ``<'info>`` opens a
+            # pseudo-string that swallows subsequent doc comments and
+            # attribute macros, breaking downstream struct-body parsing.
+            lookahead = src[i + 1 : i + 9]
+            is_char_literal = "'" in lookahead and (
+                len(lookahead) <= 4
+                or lookahead.startswith("\\")
+                or (len(lookahead) >= 2 and lookahead[1] == "'")
+            )
+            if is_char_literal:
+                in_str = True
+                str_quote = ch
+                i += 1
+                continue
+            # Lifetime — treat ``'`` as an ordinary character.
             i += 1
             continue
         if ch == "/" and nxt == "/":
@@ -372,13 +393,20 @@ def _extract_fields(struct_body: str, struct_base_offset: int, whole_src: str) -
                 pending_attrs.append(_parse_account_attr(body))
             i = end
             continue
-        # Otherwise expect `pub ident : Type ,`
-        m = re.match(rf"pub\s+(?P<name>{_IDENT})\s*:\s*", src[i:])
+        # Field header: optional `pub` visibility + ident + ":" + Type.
+        # Sealevel-attacks style (`authority: AccountInfo<'info>`) and the
+        # canonical Anchor style (`pub authority: Signer<'info>`) must both
+        # parse — the scanner rules look at `type_category`, not visibility.
+        m = re.match(
+            rf"(?P<vis>pub(?:\s*\([^)]*\))?\s+)?(?P<name>{_IDENT})\s*:\s*",
+            src[i:],
+        )
         if not m:
             i += 1
             continue
         field_start = i
         name = m.group("name")
+        is_pub = bool(m.group("vis"))
         i += m.end()
         ty, i = _read_type_until_comma(src, i)
         fields.append(
@@ -387,6 +415,7 @@ def _extract_fields(struct_body: str, struct_base_offset: int, whole_src: str) -
                 "ty": ty,
                 "type_category": _classify_account_type(ty),
                 "attrs": pending_attrs,
+                "is_pub": is_pub,
                 "line": _line_of(whole_src, struct_base_offset + field_start),
             }
         )

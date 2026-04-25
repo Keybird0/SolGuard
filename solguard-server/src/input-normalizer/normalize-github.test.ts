@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
-import { normalizeGithub, findPrimaryRustFile } from './normalize-github';
+import { normalizeGithub, findPrimaryRustFile, collectRustFiles } from './normalize-github';
 
 type SpawnLike = typeof import('node:child_process').spawn;
 
@@ -121,5 +121,29 @@ describe('findPrimaryRustFile', () => {
     writeFileSync(path.join(src, 'main.rs'), '');
     const found = findPrimaryRustFile(workdir);
     assert.ok(found && found.endsWith('src/main.rs'));
+  });
+});
+
+describe('collectRustFiles', () => {
+  it('returns every .rs under programs/ including insecure/recommended/secure', () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), 'solguard-inv-'));
+    for (const variant of ['insecure', 'recommended', 'secure']) {
+      const dir = path.join(workdir, 'programs', 'lesson-0', variant, 'src');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'lib.rs'), `// ${variant}`);
+    }
+    // target/ should be excluded.
+    const noise = path.join(workdir, 'target', 'debug', 'deps');
+    mkdirSync(noise, { recursive: true });
+    writeFileSync(path.join(noise, 'ignored.rs'), 'fn x(){}');
+    const files = collectRustFiles(workdir);
+    assert.equal(files.length, 3);
+    const suffixes = files.map((f) => f.split('programs/')[1]).sort();
+    assert.deepEqual(suffixes, [
+      'lesson-0/insecure/src/lib.rs',
+      'lesson-0/recommended/src/lib.rs',
+      'lesson-0/secure/src/lib.rs',
+    ]);
+    assert.ok(!files.some((f) => f.includes(`${path.sep}target${path.sep}`)));
   });
 });

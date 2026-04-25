@@ -164,6 +164,7 @@ class AIAnalyzer:
         semgrep_raw: dict[str, Any],
         source_code: str,
         file_path: str = "<unknown>",
+        extra_context: str | None = None,
     ) -> dict[str, Any]:
         """Run the dual-role audit.
 
@@ -186,6 +187,13 @@ class AIAnalyzer:
             source_code=_truncate_source(source_code, max_bytes=24_000),
             file_path=file_path,
         )
+        # The AI-first planner can pass a pre-built block (e.g. comparison
+        # sources from `recommended/` + `secure/` siblings in a benchmark
+        # repo, or explicit "scanner is degraded" notes). Append AFTER the
+        # structured JSON sections so the model still sees them before its
+        # answer, but the schema examples come first.
+        if extra_context:
+            user_prompt = user_prompt + "\n" + extra_context
 
         # Cache lookup (fast path when same prompt was audited before).
         cache_key = self._cache_key(user_prompt)

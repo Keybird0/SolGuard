@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: SolGuard Server API
-  version: 0.5.0
+  version: 0.7.0
   description: |
     Backend for the SolGuard Solana security-audit skill. Accepts audit
     requests (GitHub repos / Solana program addresses / whitepapers /
@@ -78,6 +78,75 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '503': { $ref: '#/components/responses/PaymentNotConfigured' }
+
+  /api/audit/batch/{batchId}:
+    get:
+      tags: [audit]
+      summary: Get batch status + per-task progress
+      description: |
+        Returns the batch envelope plus every task in that batch. Used by the
+        web UI's progress poller (default interval 3s). Reports are only
+        included when a task has `status=completed`.
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Batch snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [batch, tasks]
+                properties:
+                  batch: { $ref: '#/components/schemas/AuditBatch' }
+                  tasks:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/audit/batch/{batchId}/payment:
+    post:
+      tags: [audit]
+      summary: Submit the Solana Pay signature for an entire batch
+      description: |
+        Client pushes the wallet-broadcast `signature` for atomic batch
+        payment. The server re-validates against the Solana RPC via
+        `validateTransfer(reference, recipient, amountSol)` and, on success,
+        flips every task in the batch from `paying` → `paid` and enqueues
+        them for audit. Failing verification preserves the batch state so
+        the user can retry.
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signature]
+              properties:
+                signature:
+                  type: string
+                  description: Solana transaction signature (base58, 64 bytes raw).
+      responses:
+        '200':
+          description: Verification attempted. `ok=false` preserves batch state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string, enum: [paying, paid, failed] }
+                  signature: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
 
   /api/audit/{taskId}:
     get:
@@ -344,10 +413,32 @@ components:
         ok:     { type: boolean }
         status: { type: string }
 
+    AuditBatch:
+      type: object
+      properties:
+        batchId:             { type: string }
+        taskIds:             { type: array, items: { type: string } }
+        email:               { type: string, format: email }
+        status:
+          type: string
+          enum: [paying, paid, failed]
+        totalAmountSol:      { type: number }
+        paymentReference:    { type: string }
+        paymentRecipient:    { type: string }
+        paymentUrl:          { type: string }
+        paymentSignature:    { type: string }
+        paymentExpiresAt:    { type: string, format: date-time }
+        paymentConfirmedAt:  { type: string, format: date-time }
+        cluster:             { type: string }
+        freeAudit:           { type: boolean }
+        createdAt:           { type: string, format: date-time }
+        updatedAt:           { type: string, format: date-time }
+
     AuditTask:
       type: object
       properties:
         taskId:           { type: string, format: uuid }
+        batchId:          { type: string }
         inputs:
           type: array
           items: { $ref: '#/components/schemas/AuditInput' }

@@ -197,12 +197,20 @@
   //   11s  reporting (92%)
   //   15s  completed (100%)
   // ============================================================
-  const DEMO_CASES = ['case-01', 'case-02', 'case-03'];
+  const SEEDED_REPORT_BATCH_ID = 'demo-sealevel-ai-first';
+  const DEMO_CASES = ['case-sealevel', 'case-01', 'case-02', 'case-03'];
+  const DEFAULT_CASES = ['case-sealevel'];
   const DEMO_AMOUNT = 0.001;
   const DEMO_RECIPIENT = 'DYmzG1oSfzJoVTSXedpn1mz3MqeH7H6ykV5RBsZJuD8i';
 
   /** @type {Map<string, any>} */
   const batches = new Map();
+
+  function caseIdsForBatch(batch) {
+    return Array.isArray(batch?.taskIds) && batch.taskIds.length
+      ? batch.taskIds
+      : DEFAULT_CASES;
+  }
 
   function nowIso() {
     return new Date().toISOString();
@@ -217,6 +225,16 @@
       // polling, which the static Vercel demo intentionally mocks.
       return '11111111111111111111111111111112';
     }
+  }
+
+  function buildDemoSolanaPayUrl({ reference, amountSol, batchId }) {
+    const url = new URL('solana:' + DEMO_RECIPIENT);
+    url.searchParams.set('amount', String(amountSol));
+    url.searchParams.set('reference', reference);
+    url.searchParams.set('label', 'SolGuard Security Audit');
+    url.searchParams.set('message', `Audit batch ${batchId}`);
+    url.searchParams.set('memo', 'SolGuard audit payment');
+    return url.toString();
   }
 
   function computeTaskState(batch, caseId, idx) {
@@ -283,7 +301,8 @@
   }
 
   function computeBatch(batch) {
-    const tasks = DEMO_CASES.map((c, i) => computeTaskState(batch, c, i));
+    const caseIds = caseIdsForBatch(batch);
+    const tasks = caseIds.map((c, i) => computeTaskState(batch, c, i));
     const allCompleted = tasks.every((t) => t.status === 'completed');
     const allFailed = tasks.every((t) => t.status === 'failed');
     const status = batch.paidAt
@@ -292,12 +311,17 @@
     return {
       batch: {
         batchId: batch.batchId,
-        taskIds: DEMO_CASES.slice(),
+        taskIds: caseIds.slice(),
         email: batch.email,
         status,
-        totalAmountSol: DEMO_CASES.length * DEMO_AMOUNT,
+        totalAmountSol: caseIds.length * DEMO_AMOUNT,
         paymentReference: batch.paymentReference,
         paymentRecipient: DEMO_RECIPIENT,
+        paymentUrl: buildDemoSolanaPayUrl({
+          reference: batch.paymentReference,
+          amountSol: caseIds.length * DEMO_AMOUNT,
+          batchId: batch.batchId,
+        }),
         paymentSignature: batch.paymentSignature,
         paymentExpiresAt: batch.paymentExpiresAt,
         paymentConfirmedAt: batch.paidAt,
@@ -310,6 +334,47 @@
       allCompleted,
     };
   }
+
+  batches.set(SEEDED_REPORT_BATCH_ID, {
+    batchId: SEEDED_REPORT_BATCH_ID,
+    taskIds: DEFAULT_CASES.slice(),
+    email: 'demo@solguard.xyz',
+    inputsByCase: {
+      'case-sealevel': [
+        { type: 'github', value: 'https://github.com/coral-xyz/sealevel-attacks' },
+      ],
+    },
+    paymentReference: makeReference(),
+    paymentExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    paymentSignature: DEMO_SIGNATURE,
+    paidAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    createdAt: new Date(Date.now() - 90 * 1000).toISOString(),
+  });
+
+  function restoreCompletedDemoBatch(batchId) {
+    if (batchId !== SEEDED_REPORT_BATCH_ID && !/^demo-[a-z0-9-]+$/i.test(batchId)) {
+      return null;
+    }
+    const batch = {
+      batchId,
+      taskIds: DEFAULT_CASES.slice(),
+      email: 'demo@solguard.xyz',
+      inputsByCase: {
+        'case-sealevel': [
+          { type: 'github', value: 'https://github.com/coral-xyz/sealevel-attacks' },
+        ],
+      },
+      paymentReference: makeReference(),
+      paymentExpiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      paymentSignature: DEMO_SIGNATURE,
+      paidAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      createdAt: new Date(Date.now() - 90 * 1000).toISOString(),
+    };
+    batches.set(batchId, batch);
+    return batch;
+  }
+
+  const originalFetch = window.fetch.bind(window);
 
   // ============================================================
   // Demo report cache (loaded lazily from /demo-data/*/report.json).
@@ -363,8 +428,6 @@
   // ============================================================
   // Fetch interceptor.
   // ============================================================
-  const originalFetch = window.fetch.bind(window);
-
   function jsonResponse(body, status = 200) {
     return new Response(JSON.stringify(body), {
       status,
@@ -438,6 +501,7 @@
       // When the user submitted fewer / more than 3 we fall back to the
       // pre-canned demo labels to keep the batch visually complete.
       const demoInputsFallback = {
+        'case-sealevel': [{ type: 'github', value: 'https://github.com/coral-xyz/sealevel-attacks' }],
         'case-01': [{ type: 'github', value: 'coral-xyz/sealevel-attacks (arbitrary-cpi)' }],
         'case-02': [{ type: 'github', value: 'SolGuard/fixtures/clean-escrow' }],
         'case-03': [{ type: 'github', value: 'SolGuard/fixtures/staking-slice' }],
@@ -454,15 +518,18 @@
         return list.length ? list : null;
       }
       const submittedTargets = Array.isArray(parsed.targets) ? parsed.targets : [];
+      const selectedCases = submittedTargets.length
+        ? DEMO_CASES.slice(0, Math.min(submittedTargets.length, DEMO_CASES.length))
+        : DEFAULT_CASES.slice();
       const demoInputs = {};
-      DEMO_CASES.forEach((caseId, i) => {
+      selectedCases.forEach((caseId, i) => {
         const echoed = targetToInputs(submittedTargets[i]);
         demoInputs[caseId] = echoed || demoInputsFallback[caseId];
       });
 
       const batch = {
         batchId,
-        taskIds: DEMO_CASES.slice(),
+        taskIds: selectedCases.slice(),
         email,
         inputsByCase: demoInputs,
         paymentReference: reference,
@@ -475,12 +542,16 @@
 
       return jsonResponse({
         batchId,
-        taskIds: DEMO_CASES.slice(),
+        taskIds: selectedCases.slice(),
         status: 'paying',
-        paymentUrl: null,
+        paymentUrl: buildDemoSolanaPayUrl({
+          reference,
+          amountSol: selectedCases.length * DEMO_AMOUNT,
+          batchId,
+        }),
         paymentReference: reference,
         recipient: DEMO_RECIPIENT,
-        amountSol: DEMO_CASES.length * DEMO_AMOUNT,
+        amountSol: selectedCases.length * DEMO_AMOUNT,
         cluster: 'devnet',
         expiresAt: batch.paymentExpiresAt,
         freeAudit: false,
@@ -493,7 +564,7 @@
     // on Solscan" link opens the user's actual transaction on devnet.
     let m = path.match(/^\/api\/audit\/batch\/([^/]+)\/payment$/);
     if (m && method === 'POST') {
-      const batch = batches.get(m[1]);
+      const batch = batches.get(m[1]) || restoreCompletedDemoBatch(m[1]);
       if (!batch) return jsonResponse({ code: 'NOT_FOUND', message: 'Batch not found' }, 404);
       let providedSig;
       try { providedSig = body ? JSON.parse(body)?.signature : undefined; } catch { /* ignore */ }
@@ -512,33 +583,54 @@
     // ---- POST /api/audit/:id/payment (per-task; UI may still call this) --
     m = path.match(/^\/api\/audit\/([^/]+)\/payment$/);
     if (m && method === 'POST') {
+      let providedSig;
+      try { providedSig = body ? JSON.parse(body)?.signature : undefined; } catch { /* ignore */ }
+      const isReal = typeof providedSig === 'string' && providedSig.length >= 40 && providedSig !== DEMO_SIGNATURE;
       // Find the batch whose taskIds include this taskId; if none match but
       // the caller passed a batchId-shaped value, accept it as a batch pay.
+      let target = null;
       for (const batch of batches.values()) {
-        if (DEMO_CASES.includes(m[1]) || batch.batchId === m[1]) {
-          let providedSig;
-          try { providedSig = body ? JSON.parse(body)?.signature : undefined; } catch { /* ignore */ }
-          const isReal = typeof providedSig === 'string' && providedSig.length >= 40 && providedSig !== DEMO_SIGNATURE;
-          if (!isReal) await new Promise((r) => setTimeout(r, 1500));
-          batch.paidAt = batch.paidAt || nowIso();
-          batch.paymentSignature = providedSig || DEMO_SIGNATURE;
-          return jsonResponse({ ok: true, status: 'paid', signature: batch.paymentSignature });
+        if (batch.taskIds?.includes?.(m[1]) || batch.batchId === m[1]) {
+          target = batch;
+          break;
         }
       }
-      return jsonResponse({ code: 'NOT_FOUND', message: 'Task not found' }, 404);
+      if (!target) target = restoreCompletedDemoBatch(m[1]);
+      if (!target && DEMO_CASES.includes(m[1])) {
+        // Synthesize a single-task batch on the fly so UI can continue.
+        target = restoreCompletedDemoBatch('demo-' + Math.random().toString(36).slice(2, 10));
+      }
+      if (!target) return jsonResponse({ code: 'NOT_FOUND', message: 'Task not found' }, 404);
+      if (!isReal) await new Promise((r) => setTimeout(r, 1500));
+      target.paidAt = target.paidAt || nowIso();
+      target.paymentSignature = providedSig || DEMO_SIGNATURE;
+      return jsonResponse({ ok: true, status: 'paid', signature: target.paymentSignature });
     }
 
     // ---- GET /api/audit/batch/:id ----------------------------------------
     m = path.match(/^\/api\/audit\/batch\/([^/]+)$/);
     if (m && method === 'GET') {
-      const batch = batches.get(m[1]);
+      const batch = batches.get(m[1]) || restoreCompletedDemoBatch(m[1]);
       if (!batch) return jsonResponse({ code: 'NOT_FOUND', message: 'Batch not found' }, 404);
       const computed = computeBatch(batch);
-      // If any completed task references a report, make sure the report
-      // payload is fully loaded before we return.
-      if (computed.allCompleted) {
-        await Promise.all(DEMO_CASES.map((c) => loadCaseReport(c)));
-      }
+      // For every task that already reached "completed", block on its
+      // demo report json/md. This closes a race where preloadCaseReport()
+      // is still in-flight at the moment the report page mounts, and
+      // hydrateReport() would otherwise land on tasks[0] with empty
+      // statistics / findings and stay stuck on "Loading…".
+      await Promise.all(
+        computed.tasks.map(async (t) => {
+          if (t.status !== 'completed' || !DEMO_CASES.includes(t.taskId)) return;
+          try {
+            const rep = await loadCaseReport(t.taskId);
+            t.statistics = rep.statistics;
+            t.findings = rep.findings;
+            t.reportMarkdown = rep.reportMarkdown;
+          } catch (err) {
+            console.warn('[SolGuard demo] loadCaseReport failed for', t.taskId, err);
+          }
+        }),
+      );
       return jsonResponse({ batch: computed.batch, tasks: computed.tasks });
     }
 
@@ -564,22 +656,29 @@
     m = path.match(/^\/api\/audit\/([^/]+)$/);
     if (m && method === 'GET') {
       const caseId = m[1];
-      // Case-only fetch (no batch context): find the first batch that owns
-      // it, or synthesize a completed task from the static data.
-      for (const batch of batches.values()) {
-        if (DEMO_CASES.includes(caseId)) {
-          const idx = DEMO_CASES.indexOf(caseId);
-          const task = computeTaskState(batch, caseId, idx);
-          if (task.status === 'completed') {
-            const rep = await loadCaseReport(caseId);
-            task.statistics = rep.statistics;
-            task.findings = rep.findings;
-            task.reportMarkdown = rep.reportMarkdown;
-          }
-          return jsonResponse(task);
+      // Find a batch that owns this taskId (handles in-memory flow), then
+      // fall through to synthesize one from static data so page refresh /
+      // deep links always render, even when batches Map was wiped.
+      let batch = null;
+      for (const candidate of batches.values()) {
+        if (candidate.taskIds?.includes?.(caseId)) {
+          batch = candidate;
+          break;
         }
       }
-      return jsonResponse({ code: 'NOT_FOUND', message: 'Task not found' }, 404);
+      if (!batch && DEMO_CASES.includes(caseId)) {
+        batch = restoreCompletedDemoBatch(SEEDED_REPORT_BATCH_ID);
+      }
+      if (!batch) return jsonResponse({ code: 'NOT_FOUND', message: 'Task not found' }, 404);
+      const idx = (batch.taskIds || []).indexOf(caseId);
+      const task = computeTaskState(batch, caseId, Math.max(idx, 0));
+      if (task.status === 'completed' && DEMO_CASES.includes(caseId)) {
+        const rep = await loadCaseReport(caseId);
+        task.statistics = rep.statistics;
+        task.findings = rep.findings;
+        task.reportMarkdown = rep.reportMarkdown;
+      }
+      return jsonResponse(task);
     }
 
     // ---- POST /api/feedback ----------------------------------------------
@@ -620,7 +719,7 @@
   // ============================================================
   // Submit-page prefill — lets visitors click "Start Audit → Submit"
   // and immediately press Submit without typing anything. We pre-populate
-  // three Audit Targets (one per case study) plus a demo email. The
+  // one Sealevel-Attacks target plus a demo email. The
   // real form validation still runs against these values, so everything
   // downstream (readTargets → POST /api/audit → shim echoes back) stays
   // consistent with what the user sees on screen.
@@ -633,17 +732,7 @@
     {
       github: 'https://github.com/coral-xyz/sealevel-attacks',
       moreInfo:
-        'Case 01 · Arbitrary CPI lesson. Expected: 1 Critical + 2 High (R4, R1).',
-    },
-    {
-      github: 'https://github.com/Keybird0/solguard-escrow-sample',
-      moreInfo:
-        'Case 02 · Clean escrow slice. Expected: 0 findings, grade B-Low.',
-    },
-    {
-      github: 'https://github.com/Keybird0/solguard-staking-sample',
-      moreInfo:
-        'Case 03 · Staking rewards slice. Expected: 1 Medium integer overflow (R3).',
+        'AI-first benchmark demo · Expected: 11 Sealevel-Attacks targets, 16 findings, provenance-rich report.',
     },
   ];
   const DEMO_PREFILL_EMAIL = 'demo@solguard.xyz';

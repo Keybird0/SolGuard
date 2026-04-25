@@ -68,7 +68,7 @@ bash scripts/setup.sh
 LLM_PROVIDER=openai         # 或 anthropic
 OPENAI_API_KEY=sk-...
 PAYMENT_RECIPIENT=<你的 devnet pubkey>
-AUDIT_PRICE_SOL=0.01
+AUDIT_PRICE_SOL=0.001
 FREE_AUDIT=false            # 本地无钱包联调时置 true
 ```
 

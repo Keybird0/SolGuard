@@ -9,6 +9,24 @@
       content="AI-powered security audit for Solana smart contracts. Submit any GitHub repo or program address and get a full report in minutes."
     />
     <meta name="theme-color" content="#0a0a0b" />
+    <!-- Pre-paint theme bootstrap — runs synchronously so the first paint
+         already uses the correct palette, no white → dark flash (FOUC). -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('solguard:theme');
+          var theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+          document.documentElement.dataset.theme = theme;
+        } catch (_) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E🛡️%3C/text%3E%3C/svg%3E"
@@ -22,8 +40,20 @@
     <link rel="preconnect" href="https://api.devnet.solana.com" />
     <link rel="stylesheet" href="/styles.css" />
     <!-- Demo Mode shim — auto-activates on *.vercel.app / ?demo=1.
-         Must load BEFORE app.js so the fetch + wallet mocks are in place. -->
-    <script src="/demo-shim.js"></script>
+         Must load BEFORE app.js so the fetch + wallet mocks are in place.
+         The ?v=… cache-bust is updated whenever demo-shim.js ships a fix
+         that must override any stale Vercel Edge / browser cache. -->
+    <script src="/demo-shim.js?v=20260425-7"></script>
+    <!-- Buffer polyfill — @solana/web3.js@1.95.x IIFE expects window.Buffer
+         to exist (BN.js + Transaction serialization use Buffer.from / alloc).
+         MUST be loaded synchronously BEFORE web3.js; self-hosted UMD so no
+         third-party CDN is on the critical path during a live demo. -->
+    <script src="/vendor-buffer.js"></script>
+    <script>
+      if (typeof window !== 'undefined' && window.buffer && !window.Buffer) {
+        window.Buffer = window.buffer.Buffer;
+      }
+    </script>
     <!-- Solana web3 (IIFE exposes window.solanaWeb3) -->
     <script
       src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"
@@ -53,6 +83,16 @@
             rel="noopener"
             >GitHub</a
           >
+          <button
+            class="theme-toggle"
+            id="theme-toggle"
+            type="button"
+            aria-label="Toggle light / dark theme"
+            title="Toggle light / dark"
+          >
+            <span class="theme-icon theme-icon-dark" aria-hidden="true">🌙</span>
+            <span class="theme-icon theme-icon-light" aria-hidden="true">☀️</span>
+          </button>
           <span class="cluster-chip devnet" id="cluster-chip">Devnet</span>
         </nav>
       </div>
@@ -90,7 +130,7 @@
           <div class="stats">
             <span>⏱ <b>&lt; 5 min</b> · typical audit</span>
             <span>🧠 <b>AI + 7 rules</b> · cross-validated</span>
-            <span>💸 <b>0.01 SOL</b> · Devnet fee</span>
+            <span>💸 <b>0.001 SOL</b> · Devnet fee</span>
           </div>
         </div>
 
@@ -133,7 +173,7 @@
             <div class="step">
               <div class="num">02</div>
               <div class="title">💳 Pay with Phantom</div>
-              <div class="desc">0.01 SOL on Devnet · Solana Pay</div>
+              <div class="desc">0.001 SOL on Devnet · Solana Pay</div>
             </div>
             <div class="step">
               <div class="num">03</div>
@@ -219,11 +259,11 @@
               <div class="ps-left">
                 <div class="ps-label">Total</div>
                 <div class="ps-breakdown" id="ps-breakdown">
-                  <span id="ps-count">1</span> Target × <span id="ps-unit">0.01</span> SOL
+                  <span id="ps-count">1</span> Target × <span id="ps-unit">0.001</span> SOL
                 </div>
               </div>
               <div class="ps-amount">
-                <span id="ps-total">0.01</span>
+                <span id="ps-total">0.001</span>
                 <span class="ps-unit-label">SOL</span>
               </div>
             </div>
@@ -254,7 +294,7 @@
           <div class="progress-hero">
             <h2 id="prog-title">Preparing your audit…</h2>
             <p id="prog-subtitle">
-              Connect your wallet to pay 0.01 SOL on Devnet and start the
+              Connect your wallet to pay 0.001 SOL on Devnet and start the
               pipeline.
             </p>
           </div>
@@ -279,7 +319,7 @@
               <div class="kv-row">
                 <span class="k">Audit fee</span>
                 <span class="v" style="color: var(--brand-sol)"
-                  ><span id="pay-amount">0.01</span> SOL
+                  ><span id="pay-amount">0.001</span> SOL
                   <span class="small muted" id="pay-amount-breakdown"></span>
                 </span>
               </div>
@@ -316,6 +356,8 @@
                   rel="noopener"
                   >Install</a
                 >
+                ·
+                <a href="#" class="btn-show-qr">Prefer mobile? Scan QR →</a>
               </div>
             </div>
 
@@ -340,14 +382,38 @@
                 id="btn-pay"
                 style="width: 100%"
               >
-                💳 Pay <span id="pay-btn-amount">0.01</span> SOL &amp;
+                💳 Pay <span id="pay-btn-amount">0.001</span> SOL &amp;
                 Start Audit
               </button>
               <div class="hint" style="text-align: center; margin-top: 8px">
                 <a href="#" id="btn-manual-sig">
                   Prefer manual signature?
                 </a>
+                ·
+                <a href="#" class="btn-show-qr">Scan QR instead</a>
               </div>
+            </div>
+
+            <div id="qr-pane" class="mt-16" hidden>
+              <div class="qr-wrap">
+                <canvas
+                  id="qr-canvas"
+                  width="240"
+                  height="240"
+                  aria-label="Solana Pay QR code"
+                ></canvas>
+              </div>
+              <p class="small muted qr-hint" id="qr-status">
+                Scan with a Solana Pay-compatible mobile wallet. Amount,
+                recipient, and reference are locked by this QR code.
+              </p>
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                id="btn-hide-qr"
+              >
+                ← Back to button
+              </button>
             </div>
 
             <div id="manual-sig-pane" class="mt-16" hidden>
@@ -487,7 +553,7 @@
             <button
               class="btn btn-sm btn-outline"
               id="btn-dl-md"
-              data-tip="Download the full Markdown report"
+              data-tip="Download the current tab as Markdown (Risk Summary / Full Assessment / Checklist)"
             >
               ⬇ Download .md
             </button>
@@ -625,6 +691,6 @@
     ></div>
 
     <!-- App (ES modules) -->
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=20260425-7"></script>
   </body>
 </html>

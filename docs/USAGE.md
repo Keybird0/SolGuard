@@ -68,7 +68,7 @@ Edit `.env`:
 LLM_PROVIDER=openai         # or anthropic
 OPENAI_API_KEY=sk-...
 PAYMENT_RECIPIENT=<your devnet pubkey>
-AUDIT_PRICE_SOL=0.01
+AUDIT_PRICE_SOL=0.001
 FREE_AUDIT=false            # set true for local dev without wallet
 ```
 

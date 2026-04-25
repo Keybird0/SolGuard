@@ -15,7 +15,7 @@ export interface AgentRunOptions {
   onStderr?: (chunk: string) => void;
   spawnFn?: typeof spawn;
   cliPath?: string;
-  outputFormat?: 'json-stream' | 'json';
+  outputFormat?: 'json-stream' | 'stream-json' | 'json';
 }
 
 export interface AgentResult {
@@ -67,13 +67,14 @@ function splitLines(buffer: string): { lines: string[]; rest: string } {
 export async function runAgent(opts: AgentRunOptions): Promise<AgentResult> {
   const spawnFn = opts.spawnFn ?? spawn;
   const cli = opts.cliPath ?? config.ohCliPath;
-  const format = opts.outputFormat ?? config.ohOutputFormat;
+  const configuredFormat = opts.outputFormat ?? config.ohOutputFormat;
+  const cliFormat = configuredFormat === 'json-stream' ? 'stream-json' : configuredFormat;
   const timeoutMs = opts.timeoutMs ?? config.agentTimeoutMs;
 
-  const args = ['-p', opts.prompt, '--output-format', format];
+  const args = ['-p', opts.prompt, '--output-format', cliFormat];
 
   logger.debug(
-    { taskId: opts.taskId, cli, format, timeoutMs },
+    { taskId: opts.taskId, cli, format: cliFormat, configuredFormat, timeoutMs },
     'spawning openharness agent',
   );
 
@@ -118,7 +119,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentResult> {
     child.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8');
       stdoutBuf += text;
-      if (format === 'json-stream') {
+      if (cliFormat === 'stream-json') {
         const { lines, rest } = splitLines(pendingLine + text);
         pendingLine = rest;
         for (const line of lines) {
@@ -152,7 +153,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentResult> {
 
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (format === 'json' && stdoutBuf.trim()) {
+      if (cliFormat === 'json' && stdoutBuf.trim()) {
         const match = stdoutBuf.match(/\{[\s\S]*\}$/);
         if (match) {
           try {

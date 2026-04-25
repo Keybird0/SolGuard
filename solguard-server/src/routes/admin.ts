@@ -8,7 +8,14 @@
  */
 import { Router, type Request } from 'express';
 import { timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 import { config } from '../config';
+import { logger } from '../logger';
+import { getConnection, verifyPayment } from '../payment';
+import { getBatchStore } from '../storage/batch-store';
+import { getTaskStore } from '../storage/task-store';
+import { notifyPaymentConfirmed } from '../notify/lark';
+import { normalizeAndEnqueue } from './audit';
 import { readTaskLogTail, taskLogPath } from '../task-logger';
 
 function verifyAdmin(req: Request): { ok: boolean; reason?: string } {
@@ -68,6 +75,125 @@ router.get('/admin/logs/:taskId', (req, res) => {
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.status(200).send(tail);
+});
+
+/**
+ * POST /api/admin/batch/:batchId/force-verify-payment
+ * Body: { signature: string }
+ *
+ * Recovery endpoint for batches that were marked `failed` due to
+ * payment-poller issues (public devnet RPC 429s, expiry race, etc.)
+ * even though the on-chain transfer is valid. The operator provides
+ * the known good signature; we re-run `validateTransfer` against the
+ * chain and, on success, revive the batch:
+ *   batch.status → paid
+ *   every task  → paid, progress="Payment confirmed (force-verify)..."
+ *   normalizeAndEnqueue is kicked off so the audit pipeline resumes.
+ *
+ * Idempotent: if the batch is already paid with the same signature,
+ * we return 200 OK without re-enqueuing.
+ */
+const forceVerifyBody = z.object({ signature: z.string().min(40).max(120) });
+
+router.post('/admin/batch/:batchId/force-verify-payment', async (req, res, next) => {
+  try {
+    const auth = verifyAdmin(req);
+    if (!auth.ok) {
+      const status = config.adminToken ? 401 : 503;
+      res.status(status).json({ code: 'UNAUTHORIZED', message: auth.reason });
+      return;
+    }
+
+    const batchId = req.params.batchId ?? '';
+    const { signature } = forceVerifyBody.parse(req.body);
+
+    const batchStore = getBatchStore();
+    const taskStore = getTaskStore();
+    const batch = await batchStore.get(batchId);
+    if (!batch) {
+      res.status(404).json({ code: 'NOT_FOUND', message: 'Batch not found' });
+      return;
+    }
+
+    if (!batch.paymentReference || !batch.paymentRecipient || !batch.totalAmountSol) {
+      res.status(409).json({
+        code: 'PAYMENT_NOT_READY',
+        message: 'Batch has no payment request to verify',
+      });
+      return;
+    }
+
+    if (batch.status === 'paid' && batch.paymentSignature === signature) {
+      res.status(200).json({
+        ok: true,
+        status: 'paid',
+        signature,
+        note: 'already paid — no-op',
+      });
+      return;
+    }
+
+    const verdict = await verifyPayment({
+      connection: getConnection(),
+      signature,
+      reference: batch.paymentReference,
+      recipient: batch.paymentRecipient,
+      amountSol: batch.totalAmountSol,
+    });
+
+    if (!verdict.ok) {
+      res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_FAILED',
+        error: verdict.error,
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    await batchStore.update(batchId, {
+      status: 'paid',
+      paymentSignature: signature,
+      paymentConfirmedAt: now,
+    });
+
+    const enqueued: string[] = [];
+    for (const taskId of batch.taskIds) {
+      try {
+        const updated = await taskStore.update(taskId, {
+          status: 'paid',
+          paymentSignature: signature,
+          error: undefined,
+          progress: 'Payment confirmed (force-verify), preparing audit...',
+        });
+        void notifyPaymentConfirmed(updated).catch((err) =>
+          logger.warn({ err, taskId, batchId }, 'lark paid notify failed (force-verify)'),
+        );
+        void normalizeAndEnqueue(taskId).catch((err) => {
+          logger.error({ err, taskId, batchId }, 'normalizeAndEnqueue (force-verify) failed');
+        });
+        enqueued.push(taskId);
+      } catch (err) {
+        logger.error({ err, taskId, batchId }, 'force-verify: task flip failed');
+      }
+    }
+
+    logger.warn(
+      { batchId, signature, tasks: enqueued.length, previousStatus: batch.status },
+      'batch force-verified via admin endpoint',
+    );
+
+    res.status(200).json({
+      ok: true,
+      status: 'paid',
+      signature,
+      batchId,
+      previousStatus: batch.status,
+      tasksEnqueued: enqueued,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

@@ -100,6 +100,38 @@ def test_scan_missing_signer_fires_on_fixture_01() -> None:
     assert hits[0]["references_anchor"] == "#missing_signer_check"
 
 
+def test_scan_missing_signer_fires_on_non_pub_authority_like_sealevel() -> None:
+    # Sealevel-Attacks lesson 0 writes `authority: AccountInfo<'info>` without
+    # the `pub` modifier. Prior to the parser lifetime-quote fix the field
+    # never showed up in `ParsedContract.accounts`, so this rule silently
+    # missed the canonical benchmark case. Regression guard.
+    from tools.solana_parse import parse_source
+
+    src = """
+use anchor_lang::prelude::*;
+
+declare_id!(\"LogAuth11111111111111111111111111111111111\");
+
+#[program]
+pub mod log_message {
+    use super::*;
+    pub fn log_message(_ctx: Context<LogMessage>, _message: String) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct LogMessage<'info> {
+    authority: AccountInfo<'info>,
+}
+"""
+    pc = parse_source(src)
+    result = scan(pc)
+    hits = [h for h in result["hints"] if h["rule_id"] == "missing_signer_check"]
+    assert hits, f"expected missing_signer_check hint, got {result}"
+    assert any("authority" in h.get("code_snippet", "") for h in hits)
+
+
 # ---------------------------------------------------------------------------
 # Aggregator resilience (2 cases)
 # ---------------------------------------------------------------------------

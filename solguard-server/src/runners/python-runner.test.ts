@@ -2,6 +2,9 @@
 // Copyright (c) 2026 SolGuard Contributors
 import { strict as assert } from 'node:assert';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { runPython } from './python-runner';
@@ -97,6 +100,93 @@ describe('runPython', () => {
 
     assert.equal(result.exitCode, 3);
     assert.match(result.stderr, /RuntimeError: boom/);
+  });
+
+  it('passes an absolute script path while running uv from the skill root', async () => {
+    let seenArgs: string[] = [];
+    let seenCwd: string | undefined;
+    const scriptPath = '../skill/solana-security-audit-skill/scripts/run_audit.py';
+    const spawnFn: SpawnLike = ((_cmd: string, args: string[], options?: { cwd?: string }) => {
+      seenArgs = args;
+      seenCwd = options?.cwd;
+      return makeChild([]);
+    }) as unknown as SpawnLike;
+
+    await runPython({
+      taskId: 't-path',
+      normalizedInputs: NORMALIZED,
+      callbackUrl: 'http://localhost:3000/api/audit/t-path/complete',
+      callbackToken: 'test-token',
+      scriptPath,
+      spawnFn,
+    });
+
+    const expectedScriptPath = path.resolve(scriptPath);
+    assert.deepEqual(seenArgs.slice(0, 3), ['run', 'python', expectedScriptPath]);
+    assert.equal(
+      seenCwd,
+      path.resolve(path.dirname(expectedScriptPath), '..'),
+    );
+  });
+
+  it('builds a fallback final result from report.json when callback is unavailable', async () => {
+    const outputRoot = mkdtempSync(path.join(tmpdir(), 'solguard-runner-test-'));
+    const taskId = 't-report';
+    const taskDir = path.join(outputRoot, taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(path.join(taskDir, 'assessment.md'), '# Assessment\n', 'utf-8');
+    writeFileSync(
+      path.join(taskDir, 'report.json'),
+      JSON.stringify({
+        statistics: { critical: 1, high: 0, medium: 0, low: 0, info: 0, total: 1 },
+        findings: [
+          {
+            id: 'SCAN-000',
+            rule_id: 'arbitrary_cpi',
+            severity: 'Critical',
+            title: 'Arbitrary CPI',
+            location: 'lib.rs:22',
+            description: 'untrusted CPI target',
+            impact: 'malicious target program',
+            recommendation: 'pin the expected program id',
+            confidence: 0.3,
+          },
+        ],
+        reports: { assessment: path.join(taskDir, 'assessment.md') },
+      }),
+      'utf-8',
+    );
+    const spawnFn: SpawnLike = (() => makeChild([], [], 0)) as unknown as SpawnLike;
+
+    const result = await runPython({
+      taskId,
+      normalizedInputs: NORMALIZED,
+      outputRoot,
+      callbackUrl: 'http://localhost:3000/api/audit/t-report/complete',
+      callbackToken: 'test-token',
+      spawnFn,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(result.finalResult, {
+      status: 'completed',
+      statistics: { critical: 1, high: 0, medium: 0, low: 0, info: 0, total: 1 },
+      findings: [
+        {
+          id: 'SCAN-000',
+          ruleId: 'arbitrary_cpi',
+          severity: 'Critical',
+          title: 'Arbitrary CPI',
+          location: 'lib.rs:22',
+          description: 'untrusted CPI target',
+          impact: 'malicious target program',
+          recommendation: 'pin the expected program id',
+          codeSnippet: undefined,
+          confidence: 0.3,
+        },
+      ],
+      reportMarkdown: '# Assessment\n',
+    });
   });
 
   it('tolerates non-JSON log lines interleaved with stage events', async () => {

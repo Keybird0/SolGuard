@@ -37,6 +37,35 @@ def _by_name(items: list[dict], name: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+def test_parse_non_pub_fields_like_sealevel_attacks() -> None:
+    """Sealevel-Attacks Anchor structs omit `pub` on account fields:
+
+    ``pub struct LogMessage<'info> { authority: AccountInfo<'info> }``
+
+    The parser must still surface them so scanner rules can evaluate the
+    type — otherwise every benchmark lesson yields 0 hints.
+    """
+    code = (
+        "use anchor_lang::prelude::*;\n"
+        "#[derive(Accounts)]\n"
+        "pub struct LogMessage<'info> {\n"
+        "    authority: AccountInfo<'info>,\n"
+        "    token: AccountInfo<'info>,\n"
+        "}\n"
+    )
+    from tools.solana_parse import parse_source
+
+    pc = parse_source(code)
+    assert pc.parse_error is None
+    assert len(pc.accounts) == 1
+    fields = pc.accounts[0]["fields"]
+    names = {f["name"] for f in fields}
+    assert names == {"authority", "token"}
+    for f in fields:
+        assert f["type_category"] == "AccountInfo"
+        assert f["is_pub"] is False
+
+
 def test_parse_01_missing_signer_surfaces_authority_as_accountinfo() -> None:
     pc = parse_file(fixture_path("01_missing_signer"))
     assert pc.parse_error is None

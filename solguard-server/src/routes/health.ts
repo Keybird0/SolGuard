@@ -2,7 +2,13 @@
 // Copyright (c) 2026 SolGuard Contributors
 import { spawnSync } from 'node:child_process';
 import { Router } from 'express';
-import { config, hasAnyLlmKey, isPaymentConfigured } from '../config';
+import {
+  config,
+  hasAnyLlmKey,
+  isEmailConfigured,
+  isLarkConfigured,
+  isPaymentConfigured,
+} from '../config';
 
 const router = Router();
 
@@ -28,6 +34,8 @@ router.get('/healthz', (_req, res) => {
       llmKey: hasAnyLlmKey(),
       solanaCluster: config.solanaCluster,
       paymentConfigured: isPaymentConfigured(),
+      emailConfigured: isEmailConfigured(),
+      larkConfigured: isLarkConfigured(),
       freeAudit: config.freeAudit,
       auditPriceSol: config.auditPriceSol,
     },

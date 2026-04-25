@@ -79,14 +79,63 @@ export interface VerifyResult {
   error?: string;
 }
 
+/**
+ * True when the RPC error is transient and retry-worthy: 429 (rate limit),
+ * 5xx, connection reset/timeout. Public devnet (api.devnet.solana.com)
+ * serves 429 in bursts under any real demo traffic; retrying with backoff
+ * is the difference between "payment gets confirmed in 8s" vs "batch
+ * times out after 10min even though the tx is finalized on-chain".
+ */
+function isTransientRpcError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('429') ||
+    msg.includes('too many requests') ||
+    msg.includes('503') ||
+    msg.includes('502') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('fetch failed') ||
+    msg.includes('timed out')
+  );
+}
+
+async function withRpcRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 5,
+  baseDelayMs = 500,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientRpcError(err)) throw err;
+      const delay = baseDelayMs * Math.pow(2, i) + Math.random() * 250;
+      logger.warn(
+        { label, attempt: i + 1, of: attempts, delayMs: Math.round(delay) },
+        'RPC transient error — backing off',
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export async function findPaymentSignature(
   connection: Connection,
   reference: PublicKey,
 ): Promise<ConfirmedSignatureInfo | null> {
   try {
-    return await findReference(connection, reference, { finality: 'confirmed' });
+    return await withRpcRetry('findReference', () =>
+      findReference(connection, reference, { finality: 'confirmed' }),
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // "not found" is the canonical @solana/pay "no tx yet" signal.
+    // We return null and let the next tick retry.
     if (msg.includes('not found')) return null;
     throw err;
   }
@@ -101,15 +150,17 @@ export async function verifyPayment(params: {
 }): Promise<VerifyResult> {
   const connection = params.connection ?? getConnection();
   try {
-    await validateTransfer(
-      connection,
-      params.signature,
-      {
-        recipient: new PublicKey(params.recipient),
-        amount: new BigNumber(params.amountSol),
-        reference: new PublicKey(params.reference),
-      },
-      { commitment: 'confirmed' },
+    await withRpcRetry('validateTransfer', () =>
+      validateTransfer(
+        connection,
+        params.signature,
+        {
+          recipient: new PublicKey(params.recipient),
+          amount: new BigNumber(params.amountSol),
+          reference: new PublicKey(params.reference),
+        },
+        { commitment: 'confirmed' },
+      ),
     );
     return { ok: true, signature: params.signature };
   } catch (err) {

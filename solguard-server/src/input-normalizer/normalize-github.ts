@@ -48,10 +48,12 @@ export async function normalizeGithub(
   }
 
   const primary = findPrimaryRustFile(targetDir);
+  const files = collectRustFiles(targetDir);
   return {
     kind: 'rust_source',
     rootDir: targetDir,
     primaryFile: primary ?? undefined,
+    files,
     origin: { type: 'github', value: input.value },
   };
 }
@@ -98,6 +100,53 @@ function clone(
 }
 
 const SKIP_DIRS = new Set(['target', 'node_modules', '.git', 'vendor', 'tests', 'test']);
+const INVENTORY_SKIP_DIRS = new Set(['target', 'node_modules', '.git', 'vendor']);
+// Cap the inventory so Sealevel-Attacks-sized repos (~60 rust files) fit
+// but a vendored Solana monorepo (~thousands) doesn't blow the Python
+// prompt budget. The planner treats this as a best-effort sample, not a
+// hard requirement.
+const MAX_INVENTORY_FILES = 300;
+
+/**
+ * Collect up to MAX_INVENTORY_FILES `.rs` files under `rootDir`, skipping
+ * `target/`, `node_modules/`, etc. Unlike {@link findPrimaryRustFile} this
+ * does not treat `tests/` as a skip — lesson repos often stage reference
+ * "solutions" under `tests/` that are audit-relevant.
+ *
+ * Returns absolute paths so `run_audit.py` can feed them straight to the
+ * planner without re-resolving.
+ */
+export function collectRustFiles(rootDir: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [rootDir];
+  while (stack.length && out.length < MAX_INVENTORY_FILES) {
+    const current = stack.pop();
+    if (!current) break;
+    let entries: string[];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (name.startsWith('.')) continue;
+      const full = path.join(current, name);
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (!INVENTORY_SKIP_DIRS.has(name)) stack.push(full);
+      } else if (name.endsWith('.rs') && name !== 'build.rs') {
+        out.push(full);
+        if (out.length >= MAX_INVENTORY_FILES) break;
+      }
+    }
+  }
+  return out;
+}
 
 export function findPrimaryRustFile(rootDir: string): string | null {
   // Preferred: programs/*/src/lib.rs (Anchor layout)

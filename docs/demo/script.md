@@ -53,12 +53,12 @@
 ### Shot 3 · Solana Pay payment flow (0:45 – 1:15)
 
 - **[SCR]** Click **Submit**. The side panel shows the payment request
-  (0.01 SOL per task × 3 → 0.03 SOL total).
+  (0.001 SOL per task × 3 → 0.003 SOL total).
 - **[SCR]** Connect Phantom. Click "Pay with Phantom". Brief "Confirming…"
   spinner (demo: mocked signature in < 1 s).
 - **[SCR]** Status flips to "Paid · queued".
 - **[VO]** "Payment is a standard Solana Pay transaction on devnet. Three
-  hundredths of a SOL per task — because we believe security should have
+  thousandths of a SOL per task — because we believe security should have
   the same unit economics as a cup of coffee. In demo mode the wallet is
   mocked so judges don't need to install Phantom, but the code path is
   identical to production."

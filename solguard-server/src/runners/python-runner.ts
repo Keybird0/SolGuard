@@ -17,7 +17,7 @@
 // exit codes / stderr for logging.
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -87,10 +87,83 @@ function writeInputsJson(taskId: string, inputs: NormalizedInput[]): string {
   return filePath;
 }
 
+function resolveScriptPath(rawPath: string): string {
+  if (path.isAbsolute(rawPath)) return rawPath;
+
+  const serverRoot = path.resolve(__dirname, '..', '..');
+  const repoRoot = path.resolve(serverRoot, '..');
+  const candidates = [
+    path.resolve(process.cwd(), rawPath),
+    path.resolve(serverRoot, rawPath),
+    path.resolve(repoRoot, rawPath),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  // Preserve Node's normal relative-path behavior in the error message if no
+  // candidate exists; the caller will surface the failed path in stderr.
+  return candidates[0] as string;
+}
+
+function readFinalResultFromReport(outputRoot: string, taskId: string): unknown {
+  const taskOutputDir = path.resolve(outputRoot, taskId);
+  const reportJsonPath = path.join(taskOutputDir, 'report.json');
+  try {
+    const report = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as Record<string, unknown>;
+    const stats = (report.statistics ?? {}) as Record<string, unknown>;
+    const rawFindings = Array.isArray(report.findings) ? report.findings : [];
+    const findings = rawFindings.map((item, idx) => {
+      const finding = item as Record<string, unknown>;
+      return {
+        id: String(finding.id ?? `F-${String(idx).padStart(3, '0')}`),
+        ruleId: typeof finding.rule_id === 'string' ? finding.rule_id : undefined,
+        severity: String(finding.severity ?? 'Medium'),
+        title: String(finding.title ?? 'finding'),
+        location: String(finding.location ?? ''),
+        description: String(finding.description ?? ''),
+        impact: String(finding.impact ?? ''),
+        recommendation: String(finding.recommendation ?? ''),
+        codeSnippet:
+          typeof finding.code_snippet === 'string' ? finding.code_snippet : undefined,
+        confidence:
+          typeof finding.confidence === 'number' ? finding.confidence : undefined,
+      };
+    });
+
+    const reports = (report.reports ?? {}) as Record<string, unknown>;
+    const assessmentPath =
+      typeof reports.assessment === 'string'
+        ? reports.assessment
+        : path.join(taskOutputDir, 'assessment.md');
+    const reportMarkdown = existsSync(assessmentPath)
+      ? readFileSync(assessmentPath, 'utf-8')
+      : '';
+
+    return {
+      status: 'completed',
+      statistics: {
+        critical: Number(stats.critical ?? 0),
+        high: Number(stats.high ?? 0),
+        medium: Number(stats.medium ?? 0),
+        low: Number(stats.low ?? 0),
+        info: Number(stats.info ?? 0),
+        total: Number(stats.total ?? rawFindings.length),
+      },
+      findings,
+      reportMarkdown,
+    };
+  } catch (err) {
+    logger.warn({ err, taskId, reportJsonPath }, 'failed to read python report fallback');
+    return undefined;
+  }
+}
+
 export async function runPython(opts: PythonRunOptions): Promise<AgentResult> {
   const spawnFn = opts.spawnFn ?? spawn;
   const pythonBin = opts.pythonBin ?? config.pythonBin;
-  const scriptPath = opts.scriptPath ?? config.pythonRunAuditScript;
+  const scriptPath = resolveScriptPath(opts.scriptPath ?? config.pythonRunAuditScript);
+  const skillRoot = path.resolve(path.dirname(scriptPath), '..');
   const timeoutMs = opts.timeoutMs ?? config.agentTimeoutMs;
   const outputRoot = opts.outputRoot ?? config.auditOutputRoot;
 
@@ -128,7 +201,7 @@ export async function runPython(opts: PythonRunOptions): Promise<AgentResult> {
     let child: ChildProcess;
     try {
       child = spawnFn(pythonBin, args, {
-        cwd: path.dirname(path.resolve(scriptPath, '..')),
+        cwd: skillRoot,
         env: { ...process.env, ...opts.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -149,6 +222,7 @@ export async function runPython(opts: PythonRunOptions): Promise<AgentResult> {
     let stdoutBuf = '';
     let stderrBuf = '';
     let pendingLine = '';
+    let finalResult: unknown;
     let timedOut = false;
 
     const timer = setTimeout(() => {
@@ -195,11 +269,15 @@ export async function runPython(opts: PythonRunOptions): Promise<AgentResult> {
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (code === 0 && !finalResult) {
+        finalResult = readFinalResultFromReport(outputRoot, opts.taskId);
+      }
       resolve({
         exitCode: code,
         stdout: stdoutBuf,
         stderr: stderrBuf,
         events,
+        finalResult,
         timedOut,
       });
     });

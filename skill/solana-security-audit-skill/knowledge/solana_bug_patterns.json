@@ -1,0 +1,113 @@
+{
+  "version": "kb-lite.2026-04-25",
+  "patterns": [
+    {
+      "id": "missing_signer_check",
+      "title": "Missing signer authorization",
+      "severity": "High",
+      "aliases": ["missing_signer", "signer_authorization", "signer-authorization"],
+      "rule_ids": ["missing_signer_check"],
+      "source_signals": [],
+      "source_regex": ["authority\\s*:\\s*AccountInfo", "#\\[account\\([^\\]]*signer"],
+      "why_it_matters": "Authority-like AccountInfo fields without Signer or #[account(signer)] let callers spoof the authority account.",
+      "look_for": ["authority/admin/owner fields typed as AccountInfo", "token transfer authorities used without signer checks"],
+      "fix": "Use Signer<'info>, #[account(signer)], or an explicit is_signer/require check before privileged actions."
+    },
+    {
+      "id": "missing_owner_check",
+      "title": "Missing account owner validation",
+      "severity": "High",
+      "aliases": ["missing_owner", "owner_check", "owner-checks"],
+      "rule_ids": ["missing_owner_check"],
+      "source_signals": ["manual_deserialize"],
+      "source_regex": ["\\.owner", "try_from_slice|deserialize|unpack_unchecked"],
+      "why_it_matters": "Raw AccountInfo data can be deserialized from accounts owned by other programs unless owner is checked first.",
+      "look_for": ["AccountInfo deserialization", "mutable raw accounts", "absence of owner == program_id checks"],
+      "fix": "Use Account<'info, T> or require the account owner to equal the expected program id before reading or writing."
+    },
+    {
+      "id": "account_data_matching",
+      "title": "Account data matching / type cosplay",
+      "severity": "High",
+      "aliases": ["account_data_matching", "type_cosplay", "type-cosplay"],
+      "rule_ids": ["account_data_matching"],
+      "source_signals": ["manual_deserialize"],
+      "source_regex": ["try_from_slice|deserialize|unpack_unchecked"],
+      "why_it_matters": "Programs must bind deserialized account data to the expected discriminator, owner, and semantic identity.",
+      "look_for": ["manual deserialization into trusted structs", "missing discriminator or key equality checks"],
+      "fix": "Use Anchor Account<T> or explicitly validate discriminator, owner, and expected keys before trusting fields."
+    },
+    {
+      "id": "arbitrary_cpi",
+      "title": "Arbitrary CPI target",
+      "severity": "Critical",
+      "aliases": ["arbitrary_cpi", "arbitrary-cpi"],
+      "rule_ids": ["arbitrary_cpi"],
+      "source_signals": ["invoke", "invoke_signed", "spl_token_instruction"],
+      "source_regex": ["ctx\\.accounts\\.[A-Za-z_]+\\.key", "spl_token::instruction::[A-Za-z_]+"],
+      "why_it_matters": "If a CPI program id comes from user-controlled accounts, attackers can route trusted account metas to malicious programs.",
+      "look_for": ["program_id sourced from ctx.accounts", "token_program typed as AccountInfo", "missing equality check against known program id"],
+      "fix": "Use Program<'info, Token> or require_keys_eq!(program.key(), spl_token::ID) before invoking."
+    },
+    {
+      "id": "pda_derivation_error",
+      "title": "Non-canonical or shared PDA derivation",
+      "severity": "High",
+      "aliases": ["pda_derivation_error", "bump_seed", "bump-seed-canonicalization", "pda-sharing"],
+      "rule_ids": ["pda_derivation_error"],
+      "source_signals": ["create_program_address", "find_program_address", "invoke_signed"],
+      "source_regex": ["create_program_address\\s*\\(", "invoke_signed\\s*\\("],
+      "why_it_matters": "User-controlled bumps or insufficient seed domains can validate alternate PDAs or share authority across users.",
+      "look_for": ["caller supplied bump", "create_program_address instead of canonical find_program_address", "seeds missing user/domain separation"],
+      "fix": "Use canonical bumps and Anchor seeds/bump constraints with domain-separated seeds."
+    },
+    {
+      "id": "uninitialized_account",
+      "title": "Uninitialized or re-initializable account",
+      "severity": "High",
+      "aliases": ["uninitialized_account", "initialization"],
+      "rule_ids": ["uninitialized_account"],
+      "source_signals": ["try_borrow_mut_data", "manual_deserialize"],
+      "source_regex": ["initialize\\s*\\(", "try_borrow_mut_data\\s*\\("],
+      "why_it_matters": "Manual initialization without an initialized flag or discriminator check can allow repeated initialization.",
+      "look_for": ["initialize handlers writing raw data", "missing initialized/discriminator guard"],
+      "fix": "Use Anchor init constraints or write and enforce an initialized discriminator before mutation."
+    },
+    {
+      "id": "duplicate_mutable_accounts",
+      "title": "Duplicate mutable accounts",
+      "severity": "Medium",
+      "aliases": ["duplicate_mutable_accounts", "duplicate-mutable-accounts"],
+      "rule_ids": ["duplicate_account", "custom:duplicate_mutable_accounts"],
+      "source_signals": ["require_keys_neq"],
+      "source_regex": ["user_a|user_b", "require_keys_neq!"],
+      "why_it_matters": "Two writable accounts may alias the same address unless the program enforces distinctness.",
+      "look_for": ["two mutable Account fields", "absence of key inequality checks"],
+      "fix": "Add require_keys_neq! or Anchor account constraints to enforce distinct writable accounts."
+    },
+    {
+      "id": "sysvar_spoofing",
+      "title": "Sysvar address spoofing",
+      "severity": "Medium",
+      "aliases": ["sysvar_spoofing", "sysvar-address-checking"],
+      "rule_ids": ["sysvar_spoofing", "custom:sysvar_spoofing"],
+      "source_signals": [],
+      "source_regex": ["rent\\s*:\\s*AccountInfo", "clock\\s*:\\s*AccountInfo"],
+      "why_it_matters": "Sysvar accounts passed as raw AccountInfo can be spoofed unless the address or Sysvar type is enforced.",
+      "look_for": ["Rent/Clock/Instructions sysvars typed as AccountInfo", "missing sysvar ID check"],
+      "fix": "Use Sysvar<'info, T> or require the account key to equal the canonical sysvar id."
+    },
+    {
+      "id": "closing_account_error",
+      "title": "Unsafe account closing / account revival",
+      "severity": "High",
+      "aliases": ["closing_account_error", "closing-accounts"],
+      "rule_ids": ["closing_account_error", "custom:closing_account_error"],
+      "source_signals": ["manual_lamports", "account_close"],
+      "source_regex": ["lamports\\s*\\(", "close\\s*\\("],
+      "why_it_matters": "Draining lamports without writing the closed-account discriminator can allow account revival.",
+      "look_for": ["manual lamport transfer during close", "data not zeroed", "missing Anchor close constraint"],
+      "fix": "Use Anchor close constraints or zero data and write the closed-account discriminator after draining lamports."
+    }
+  ]
+}

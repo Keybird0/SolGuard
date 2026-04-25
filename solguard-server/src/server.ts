@@ -6,7 +6,7 @@ import cors from 'cors';
 import express from 'express';
 import pinoHttp from 'pino-http';
 import { getAuditEngine } from './audit-engine';
-import { config } from './config';
+import { config, isEmailConfigured, isLarkConfigured } from './config';
 import { logger } from './logger';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { createRateLimiter } from './middleware/rate-limit';
@@ -93,6 +93,17 @@ function main(): void {
   const app = createApp();
   const store = getTaskStore();
   const engine = getAuditEngine({ store });
+
+  if (!isLarkConfigured()) {
+    logger.warn(
+      'LARK_WEBHOOK_URL is not configured; operator lifecycle notifications are disabled',
+    );
+  }
+  if (!isEmailConfigured()) {
+    logger.warn(
+      'SMTP_HOST/SMTP_USER/SMTP_PASS are not fully configured; report emails will be logged only',
+    );
+  }
 
   if (!config.freeAudit) {
     startPaymentPoller({

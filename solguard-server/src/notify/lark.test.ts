@@ -57,7 +57,7 @@ function sampleTask(overrides: Partial<AuditTask> = {}): AuditTask {
     status: 'paying',
     createdAt: now,
     updatedAt: now,
-    paymentAmountSol: 0.01,
+    paymentAmountSol: 0.001,
     paymentRecipient: 'DYmzG1oSfzJoVTSXedpn1mz3MqeH7H6ykV5RBsZJuD8i',
     paymentUrl: 'solana:...',
     ...overrides,

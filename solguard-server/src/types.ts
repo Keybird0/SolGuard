@@ -62,6 +62,15 @@ export type NormalizedInput =
       kind: 'rust_source';
       rootDir: string;
       primaryFile?: string;
+      /**
+       * Optional list of Rust files discovered under `rootDir` (relative or
+       * absolute paths). The AI-first planner in `run_audit.py` consumes
+       * this to build an inventory without re-walking the filesystem. When
+       * omitted, the planner falls back to walking `rootDir` itself. Empty
+       * array is not the same as omitted — callers should pass `undefined`
+       * to signal "no inventory attempt was made".
+       */
+      files?: string[];
       origin: AuditInput;
     }
   | {
