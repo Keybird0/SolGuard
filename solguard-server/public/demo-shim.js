@@ -534,6 +534,10 @@
   // downstream (readTargets → POST /api/audit → shim echoes back) stays
   // consistent with what the user sees on screen.
   // ============================================================
+  // GitHub values must match the frontend regex in app.js:
+  //   /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/
+  // i.e. exactly two path segments (owner/repo), no sub-path. Pick
+  // plausible-looking owner/repo pairs so the rendered UI feels real.
   const DEMO_PREFILL_TARGETS = [
     {
       github: 'https://github.com/coral-xyz/sealevel-attacks',
@@ -541,12 +545,12 @@
         'Case 01 · Arbitrary CPI lesson. Expected: 1 Critical + 2 High (R4, R1).',
     },
     {
-      github: 'https://github.com/SolGuard/fixtures/clean-escrow',
+      github: 'https://github.com/Keybird0/solguard-escrow-sample',
       moreInfo:
         'Case 02 · Clean escrow slice. Expected: 0 findings, grade B-Low.',
     },
     {
-      github: 'https://github.com/SolGuard/fixtures/staking-slice',
+      github: 'https://github.com/Keybird0/solguard-staking-sample',
       moreInfo:
         'Case 03 · Staking rewards slice. Expected: 1 Medium integer overflow (R3).',
     },
