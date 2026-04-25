@@ -59,7 +59,19 @@ export async function buildPaymentTx({
  * Falls back to `signTransaction` + manual broadcast if needed.
  */
 export async function signAndSend({ provider, tx, conn }) {
-  if (typeof provider.signAndSendTransaction === 'function') {
+  // In demo mode with a real wallet, Phantom's signAndSendTransaction uses
+  // whatever cluster the wallet UI is pointed at — if the user left it on
+  // mainnet our devnet-blockhash tx would be rejected. Force the manual
+  // sign + broadcast path so `conn` (always devnet) is the broadcast route.
+  const forceManualBroadcast =
+    typeof window !== 'undefined' &&
+    window.__SOLGUARD_DEMO &&
+    !window.__SOLGUARD_DEMO_MOCK_WALLET;
+
+  if (
+    !forceManualBroadcast &&
+    typeof provider.signAndSendTransaction === 'function'
+  ) {
     const { signature } = await provider.signAndSendTransaction(tx);
     return signature;
   }
@@ -124,10 +136,11 @@ export async function payAudit({
   rpcUrl,
   onSignatureBroadcast,
 }) {
-  // Demo mode short-circuit — skip tx building, signing, broadcasting and
-  // confirmation. Returns a fake signature after a short delay so the UI's
-  // "Confirming…" spinner still flashes.
-  if (typeof window !== 'undefined' && window.__SOLGUARD_DEMO) {
+  // Demo mode short-circuit — only when we also installed the mock wallet.
+  // If the visitor has a real Phantom we fall through to the live path and
+  // actually transfer `amountSol` to `recipient` on devnet, because seeing
+  // their balance drop is the point of the hybrid demo.
+  if (typeof window !== 'undefined' && window.__SOLGUARD_DEMO_MOCK_WALLET) {
     const demoSig =
       'demoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSig11';
     await new Promise((r) => setTimeout(r, 600));

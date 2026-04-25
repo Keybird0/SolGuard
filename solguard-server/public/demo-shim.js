@@ -9,12 +9,26 @@
 //   - window.__SOLGUARD_DEMO was set by a previous script.
 //
 // When active, it intercepts `window.fetch` so all /api/* and /healthz calls
-// return pre-canned responses driven by 3 case studies in /demo-data/. It also
-// installs a mock Phantom provider on `window.solana` so the Submit → Pay →
-// Progress → Report flow works without any real wallet / Devnet connection.
+// return pre-canned responses driven by 3 case studies in /demo-data/.
 //
-// The real backend code is untouched; wallet.js and payment.js consult
-// `window.__SOLGUARD_DEMO` to decide whether to use the mock payment path.
+// Hybrid wallet strategy
+// ----------------------
+// If the visitor has a real Phantom (or compatible) wallet injected at shim
+// load time (window.solana?.isPhantom), we KEEP the real provider — the
+// balance widget hits devnet RPC for real, and "Pay 0.003 SOL" broadcasts a
+// real transfer to DEMO_RECIPIENT on devnet. The mock /api/* endpoints still
+// serve the pre-canned reports, but the wallet half is live. This gives
+// wallet-equipped visitors a tangible "I actually paid and saw my balance
+// drop" experience.
+//
+// If no real wallet is present, we fall back to a mock window.solana and
+// wallet.js / payment.js short-circuit to fake balance / fake signature.
+//
+// Two globals tell the rest of the page which mode we're in:
+//   window.__SOLGUARD_DEMO            = true whenever the shim is active
+//   window.__SOLGUARD_DEMO_MOCK_WALLET = true only when we installed the mock
+// wallet.js + payment.js consult __SOLGUARD_DEMO_MOCK_WALLET (not the outer
+// demo flag) to decide whether to skip real RPC / real signing.
 
 (function initDemoShim() {
   'use strict';
@@ -35,17 +49,47 @@
   }
 
   window.__SOLGUARD_DEMO = true;
-  console.info('[SolGuard] Demo Mode active — /api/* calls are served from /demo-data/');
+  // Tentative default: we'll refine after a short poll below, but set a safe
+  // initial value so any ultra-early caller sees *some* answer. Start with
+  // "mock" unless we already see a real wallet at this exact tick.
+  const syncSaw = detectRealProviderSync();
+  window.__SOLGUARD_DEMO_MOCK_WALLET = !syncSaw;
+
+  /**
+   * Synchronous probe for any wallet-standard provider that a browser
+   * extension has injected. Phantom injects in two places:
+   *   - window.phantom.solana  (modern, always available once injected)
+   *   - window.solana          (legacy alias, set alongside the modern one)
+   * Backpack / Solflare have their own namespaces. We mirror whichever we
+   * find back onto window.solana so wallet.js (which only knows window.solana)
+   * picks it up transparently.
+   */
+  function detectRealProviderSync() {
+    const fromPhantomNs = window.phantom?.solana;
+    if (fromPhantomNs?.isPhantom && !fromPhantomNs.isDemo) {
+      if (!window.solana || window.solana.isDemo) window.solana = fromPhantomNs;
+      return fromPhantomNs;
+    }
+    if (window.solana?.isPhantom && !window.solana.isDemo) return window.solana;
+    if (window.backpack?.isBackpack) return window.backpack;
+    if (window.solflare?.isSolflare) return window.solflare;
+    return null;
+  }
 
   // ============================================================
-  // Demo banner — rendered once DOM is ready.
+  // Demo banner — rendered once DOM is ready. Text flips between
+  // "live wallet" / "mock wallet" after the async probe decides.
   // ============================================================
+  function bannerText() {
+    return window.__SOLGUARD_DEMO_MOCK_WALLET
+      ? 'DEMO MODE — reports are pre-generated; no real scanning, no real Solana transactions happen here.'
+      : 'DEMO MODE · audit reports are pre-generated — but your real Phantom will pay 0.003 SOL on Devnet for the demo.';
+  }
   function renderBanner() {
     if (document.getElementById('demo-banner')) return;
     const bar = document.createElement('div');
     bar.id = 'demo-banner';
-    bar.textContent =
-      'DEMO MODE — reports are pre-generated; no real scanning, no real Solana transactions happen here.';
+    bar.textContent = bannerText();
     bar.style.cssText = [
       'position:fixed',
       'top:0',
@@ -65,6 +109,10 @@
     document.body.appendChild(bar);
     document.body.style.paddingTop = '34px';
   }
+  function updateBannerText() {
+    const el = document.getElementById('demo-banner');
+    if (el) el.textContent = bannerText();
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', renderBanner, { once: true });
   } else {
@@ -74,14 +122,16 @@
   // ============================================================
   // Mock Phantom provider. wallet.js calls provider.connect() and
   // provider.signAndSendTransaction(tx); payment.js short-circuits
-  // this when __SOLGUARD_DEMO is true so the tx is never built.
+  // this when __SOLGUARD_DEMO_MOCK_WALLET is true so the tx is never built.
   // ============================================================
   const DEMO_PUBKEY = 'Fi1ocNuvGaGP8dVSSCuhCkxzBe4Rt2jB89fBL8FnUBWD';
   const DEMO_SIGNATURE =
     'demoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSigDemoSig11';
 
   function installMockWallet() {
+    // Guard: if a real wallet is injected (or our mock is already here), bail.
     if (window.solana && window.solana.isPhantom) return;
+    if (!window.__SOLGUARD_DEMO_MOCK_WALLET) return;
     const listeners = { accountChanged: [], disconnect: [] };
     // Minimal PublicKey shim (wallet.js expects .toString()).
     const pk = { toString: () => DEMO_PUBKEY };
@@ -109,7 +159,33 @@
       },
     };
   }
-  installMockWallet();
+
+  // Async wallet probe — give Phantom / Backpack / Solflare up to ~900ms to
+  // inject (some extensions are slow on cold starts / content-script restarts)
+  // before committing to the mock. app.js only reads window.solana after the
+  // user clicks "Connect Wallet", which is far later than this budget, so we
+  // don't race against it.
+  (async function finalizeWalletDecision() {
+    const deadline = Date.now() + 900;
+    let provider = detectRealProviderSync();
+    while (!provider && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 60));
+      provider = detectRealProviderSync();
+    }
+    if (provider) {
+      window.__SOLGUARD_DEMO_MOCK_WALLET = false;
+      console.info(
+        '[SolGuard] Demo Mode — real wallet detected, balance + payment will hit Devnet RPC',
+      );
+    } else {
+      window.__SOLGUARD_DEMO_MOCK_WALLET = true;
+      console.info(
+        '[SolGuard] Demo Mode — no wallet detected, installing mock Phantom',
+      );
+      installMockWallet();
+    }
+    updateBannerText();
+  })();
 
   // ============================================================
   // In-memory batch state.
@@ -410,15 +486,25 @@
     }
 
     // ---- POST /api/audit/batch/:id/payment -------------------------------
+    // When a real wallet signed + broadcast the tx, the client POSTs the
+    // real base58 signature in the body. We echo it back so the UI's "View
+    // on Solscan" link opens the user's actual transaction on devnet.
     let m = path.match(/^\/api\/audit\/batch\/([^/]+)\/payment$/);
     if (m && method === 'POST') {
       const batch = batches.get(m[1]);
       if (!batch) return jsonResponse({ code: 'NOT_FOUND', message: 'Batch not found' }, 404);
-      // Simulate 1.5s payment finality so users see the "Confirming…" state.
-      await new Promise((r) => setTimeout(r, 1500));
+      let providedSig;
+      try { providedSig = body ? JSON.parse(body)?.signature : undefined; } catch { /* ignore */ }
+      const isReal = typeof providedSig === 'string' && providedSig.length >= 40 && providedSig !== DEMO_SIGNATURE;
+      // If the caller already waited for on-chain confirmation (real wallet
+      // path), skip the cosmetic 1.5s delay. Otherwise keep it so the mock
+      // path still shows the "Confirming…" state briefly.
+      if (!isReal) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
       batch.paidAt = nowIso();
-      batch.paymentSignature = DEMO_SIGNATURE;
-      return jsonResponse({ ok: true, status: 'paid', signature: DEMO_SIGNATURE });
+      batch.paymentSignature = providedSig || DEMO_SIGNATURE;
+      return jsonResponse({ ok: true, status: 'paid', signature: batch.paymentSignature });
     }
 
     // ---- POST /api/audit/:id/payment (per-task; UI may still call this) --
@@ -428,10 +514,13 @@
       // the caller passed a batchId-shaped value, accept it as a batch pay.
       for (const batch of batches.values()) {
         if (DEMO_CASES.includes(m[1]) || batch.batchId === m[1]) {
-          await new Promise((r) => setTimeout(r, 1500));
+          let providedSig;
+          try { providedSig = body ? JSON.parse(body)?.signature : undefined; } catch { /* ignore */ }
+          const isReal = typeof providedSig === 'string' && providedSig.length >= 40 && providedSig !== DEMO_SIGNATURE;
+          if (!isReal) await new Promise((r) => setTimeout(r, 1500));
           batch.paidAt = batch.paidAt || nowIso();
-          batch.paymentSignature = DEMO_SIGNATURE;
-          return jsonResponse({ ok: true, status: 'paid', signature: DEMO_SIGNATURE });
+          batch.paymentSignature = providedSig || DEMO_SIGNATURE;
+          return jsonResponse({ ok: true, status: 'paid', signature: batch.paymentSignature });
         }
       }
       return jsonResponse({ code: 'NOT_FOUND', message: 'Task not found' }, 404);

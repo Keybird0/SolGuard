@@ -67,8 +67,10 @@ export function onDisconnect(cb) {
 
 /** Devnet SOL balance (in SOL) of the given public key. */
 export async function getBalanceSol(publicKeyStr, rpcUrl = DEVNET_RPC) {
-  // Demo mode short-circuit — never touches the Solana RPC.
-  if (typeof window !== 'undefined' && window.__SOLGUARD_DEMO) {
+  // Demo mode short-circuit — only when we also installed the mock wallet.
+  // If the visitor has a real Phantom (__SOLGUARD_DEMO_MOCK_WALLET === false)
+  // we still hit devnet RPC so they see their actual balance.
+  if (typeof window !== 'undefined' && window.__SOLGUARD_DEMO_MOCK_WALLET) {
     return 2.5;
   }
   const { Connection, PublicKey } = window.solanaWeb3;
