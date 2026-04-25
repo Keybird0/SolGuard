@@ -265,6 +265,37 @@ Each ADR follows the 3-paragraph format: **Context → Decision → Consequence*
 
 **Consequence.** Zero external dependencies in the dev / self-host path — `npm run dev` just works. At scale this caps us to a few hundred concurrent tasks per node (file descriptor and fs-syscall overhead) — fine for a hackathon demo and self-hosted deployments, but would need to be swapped for Postgres or Redis if we ever run a multi-tenant SaaS. The swap is isolated behind the `TaskStore` interface in `task-store.ts`.
 
+### ADR-009: Deterministic input classification & normalization (vs Agent-orchestrated)
+
+**Context.** The `04-实现预期.md` document expects (B2) "AI 内容解析 — 研判用户输入了什么信息" and (B3) "AI 工具采集信息 — 下载代码 / RPC / 白皮书 / 网站抓取". A literal reading would put the LLM in charge of *both* deciding what kind of input the user submitted and orchestrating the IO calls (git clone / `getAccountInfo` / fetch). We considered three implementations: (a) full Agent orchestration with LLM round-trips for type detection and tool dispatch, (b) hybrid — regex/Zod for type detection but Agent for IO, (c) fully deterministic input pipeline with no LLM in the normalize path.
+
+**Decision.** We chose **(c) fully deterministic** for input classification + normalization. `validators/audit.ts` uses Zod with regex (`^https://github.com/[\w.-]+/[\w.-]+/?$`, base58 32–44, http(s) URL) to classify all 4 input types with 100% accuracy and zero LLM calls. The normalizer (`input-normalizer/{normalize-github,normalize-contract-address,normalize-url}.ts`) does git-clone / RPC / fetch as plain TypeScript with concurrency, retry, SSRF rejection, and error fan-out. The L3 multi-view + L4 four-gate AI work — where ambiguity and attack-scenario reasoning matter — stays Agent-driven per ADR-007.
+
+**Consequence.** This is the **explicit boundary of the v0.8 skill-first philosophy**: IO + error handling + format detection → deterministic; rule ambiguity + attack-scenario reasoning → AI. The boundary is justified by:
+
+1. **Zero ROI for LLM type detection** — regex + Zod gets 100% on the 4 input types (GitHub URL pattern, base58 length, http scheme); LLM cannot do better, only slower/more expensive/non-deterministic.
+2. **IO is well-served by existing engineering primitives** — `git clone --depth=1` with timeout, RPC retry with exponential backoff, fetch with redirect-follow + SSRF reject, lead recursion with depth cap. Replacing these with Agent calls would require re-implementing all of it inside an LLM loop while introducing token cost on every clone/fetch.
+3. **Aligned with ADR-007** — M1 skill-first deleted ~1100 LoC of Python that hard-coded LLM orchestration in places where deterministic behaviour was correct. Letting the Agent re-orchestrate `getAccountInfo` would be the same anti-pattern in TypeScript.
+
+**Where we *do* leave AI hooks for the input layer**:
+
+- `normalize-url.ts` exposes an optional `llmExtractor` callback (default `null`); when regex `extractLeads` returns 0 leads from a fetched whitepaper PDF, callers may inject an LLM-driven extractor. Default off; M2 timing.
+- `validators/more-info-guard.ts` is heuristic-first but ships with `references/input-guard-prompt.md` as a ready-to-wire LLM fallback; activate via `INPUT_GUARD_LLM_FALLBACK=true`. See ADR-009 sibling note in `docs/PROMPTS.md` (or §"Prompt Asset Inventory" below) and predictable rule-id surfacing in `more-info-guard.ts::GuardReject.ruleId`.
+- `normalize-contract-address.ts` v0.8.1 also pulls **on-chain authority** (mint / freeze / upgrade) into the `OnchainAuthority` snapshot — see `references/report-templates.md §"v0.8.1 链上数据源"`. This satisfies B7-ii ("链上数据情况") with zero AI involvement; the Authority risk matrix in the report is filled deterministically from RPC bytes.
+
+### Prompt Asset Inventory (C4 expectation)
+
+`04-实现预期.md` C4 lists "Prompt 准备" as a deliverable, with 4 sub-items. Current asset map:
+
+| C4 sub-item | Status | File |
+|---|---|---|
+| C4-i SKILL.md 编排 | ✅ shipped | `skill/.../SKILL.md` (600+ lines, 6-step SOP, 7 rule cards) |
+| C4-ii 判断用户是否输入恶意信息 prompt | ✅ shipped (asset-ready, default off) | `skill/.../references/input-guard-prompt.md` (system + user template + fallback action table) |
+| C4-iii 研判输入 + 决定下一步采集 prompt | 🟡 partially covered by deterministic normalizer; LLM-side prompt deferred to M2 (`normalize-url.ts::llmExtractor` hook reserved) | — |
+| C4-iv 不同 Agent AI 审计 prompt | ✅ shipped | `references/l3-agents-playbook.md` (A1 + A2) · `references/l4-judge-playbook.md` (Gate2 + Gate3) · legacy `ai/prompts_v2.py` (deprecated, benchmark-replay only) |
+
+All shipped prompts are markdown-first per the v0.8 philosophy — the Agent reads them at execute time, not Python at compile time.
+
 ## 5. Concurrency model
 
 - **HTTP layer**: Node's single event loop. No thread pool beyond `crypto` / `fs` natives.
