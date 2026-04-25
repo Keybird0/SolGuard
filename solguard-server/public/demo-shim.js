@@ -208,13 +208,15 @@
     return new Date().toISOString();
   }
   function makeReference() {
-    // base58-like 43-char string; we just need something to display.
-    return (
-      'Demo' +
-      Math.random().toString(36).slice(2, 12) +
-      Math.random().toString(36).slice(2, 12) +
-      Math.random().toString(36).slice(2, 12)
-    ).slice(0, 43);
+    // Must be a real Solana public key: the live wallet path passes this to
+    // new PublicKey(reference) and appends it as the Solana Pay reference key.
+    try {
+      return window.solanaWeb3.Keypair.generate().publicKey.toBase58();
+    } catch {
+      // Valid fallback public key; uniqueness is only needed for backend
+      // polling, which the static Vercel demo intentionally mocks.
+      return '11111111111111111111111111111112';
+    }
   }
 
   function computeTaskState(batch, caseId, idx) {
