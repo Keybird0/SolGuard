@@ -23,15 +23,19 @@
 #   3) solguard-server/src/audit-engine.ts buildAuditPrompt + TOOL_STATUS_MAP
 
 name: solana-security-audit-skill
-version: 0.1.0-alpha
+version: 0.8.0
 description: >-
-  AI-first Solana / Anchor security audit orchestration. Five Python
-  tools implement the six-step SOP defined in SKILL.md; LLM calls go
-  through `solana_ai_analyze` exclusively.
+  Skill-first Solana / Anchor security audit orchestration. L3 (A1 / A2
+  agents) and L4 (Gate2 / Gate3) LLM work is played by the outer Agent
+  following references/l3-agents-playbook.md + l4-judge-playbook.md.
+  Python tools are deterministic (parse, scan, semgrep, kill-signal,
+  7-question gate, post-processing, reporting).
 
-# The `tools[]` array matches the strict execution order enforced by the
-# Agent prompt. Each entry is sufficient to `python -c "from <module>
-# import <class>; <class>().execute(**args)"`.
+# The `tools[]` array lists every Python entry the Agent may invoke. The
+# ones marked `llm: false` are mechanical (regex / logic / dedup). Gate2
+# and Gate3 do NOT appear here as LLM tools — the Agent plays them
+# directly per the playbooks; only the deterministic *verdict* / *scenario*
+# classifiers are exposed.
 tools:
   - name: solana_parse
     step: 2
@@ -39,6 +43,7 @@ tools:
     description: Parse Rust / Anchor source into ParsedContract.
     inputs: [code, code_path]
     output_schema: core.types.ParsedContract
+    llm: false
 
   - name: solana_scan
     step: 3
@@ -46,6 +51,7 @@ tools:
     description: Run every rule in tools/rules/ on a ParsedContract.
     inputs: [parsed]
     output_schema: { findings: "Finding[]", statistics: object, errors: "string[]" }
+    llm: false
 
   - name: solana_semgrep
     step: 4
@@ -53,14 +59,98 @@ tools:
     description: Run tools/semgrep_rules/*.yaml via `semgrep --json`.
     inputs: [root_dir, rules_dir]
     output_schema: { results: object, tool_error: string }
+    llm: false
+
+  - name: solana_kill_signal
+    step: 5
+    entry: tools.solana_kill_signal:SolanaKillSignalTool
+    description: >-
+      Gate1 — deterministic regex / AST kill-signal check against
+      solana_bug_patterns.json::kill_signals[]. Mutates Candidate status
+      in place and returns {live[], killed[]}. No LLM.
+    inputs: [candidates, kb_patterns, source_code]
+    output_schema:
+      gate: "gate1_kill_signal"
+      applied: int
+      killed: int
+      details: "object[]"
+      candidates: "Candidate[]"
+    llm: false
+
+  - name: solana_cq_verdict
+    step: 5
+    entry: tools.solana_cq_verdict:SolanaCqVerdictTool
+    description: >-
+      Gate2 deterministic landing — takes the 6-question verdict dict
+      produced by the outer Agent (per l4-judge-playbook §2.3) plus the
+      KB pattern, applies the KILL / DOWNGRADE / KEEP action table
+      (Q1/Q5 → KILL, others → DOWNGRADE) and enforces per-rule severity
+      floor. Returns the mutated Candidate + trace.
+    inputs: [candidate, verdict, pattern]
+    output_schema:
+      gate: "gate2_counter_question"
+      verdict: "keep | downgrade | kill"
+      yes_ids: "string[]"
+      severity_after: string
+      candidate: Candidate
+    llm: false
+
+  - name: solana_attack_classify
+    step: 5
+    entry: tools.solana_attack_classify:SolanaAttackClassifyTool
+    description: >-
+      Gate3 deterministic landing — takes the 6-step attack scenario
+      dict produced by the outer Agent (per l4-judge-playbook §3.3),
+      KILLs on empty CALL / RESULT, DOWNGRADEs on negative NET ROI,
+      otherwise keeps and attaches scenario to candidate.raw.
+    inputs: [candidate, scenario]
+    output_schema:
+      gate: "gate3_attack_scenario"
+      verdict: "keep | downgrade | kill"
+      call_empty: bool
+      result_empty: bool
+      net_roi_positive: bool
+      candidate: Candidate
+    llm: false
+
+  - name: solana_seven_q
+    step: 5
+    entry: tools.solana_seven_q:SolanaSevenQTool
+    description: >-
+      Gate4 — deterministic 7-Question gate (workflow.md §6.2). Reuses
+      Gate3 call_feasible / net_roi_positive + Gate2 Q3 YES flag; no LLM.
+      Q1/Q2/Q3 failing ⇒ KILL.
+    inputs: [candidates, kb_patterns]
+    output_schema:
+      gate: "gate4_seven_q"
+      applied: int
+      killed: int
+      details: "object[]"
+      candidates: "Candidate[]"
+    llm: false
+
+  - name: solana_judge_lite
+    step: 5
+    entry: tools.solana_judge_lite:SolanaJudgeLiteTool
+    description: >-
+      Post-processing for L4 survivors — dedup by (rule_id, location),
+      enforce per-rule severity floor from KB, and stamp provenance
+      metadata (source, killed_by, gate_traces) onto Finding.kill_signal.
+    inputs: [findings, kb_patterns, provenance]
+    output_schema:
+      findings: "Finding[]"
+      dropped: "Finding[]"
+      statistics: object
+    llm: false
 
   - name: solana_ai_analyze
     step: 5
     entry: ai.analyzer_tool:AIAnalyzerTool
+    deprecated: true
     description: >-
-      Dual-role LLM call — cross-validate scan+semgrep hints (Kill-Signal
-      inline) AND explore for new vulnerabilities. Returns
-      {confirmed, exploratory, rejected, decision, token_usage}.
+      [Deprecated v0.8] Legacy dual-role LLM call (cross_validate_and_explore).
+      Kept only to replay archived benchmark runs. New sessions must use
+      the skill-driven L3/L4 tools above.
     inputs: [parse_result, scan_hints, semgrep_raw, source_code, file_path]
     output_schema:
       confirmed: "Finding[]"
@@ -68,6 +158,7 @@ tools:
       rejected: "Finding[]"
       decision: "ok | degraded"
       token_usage: object
+    llm: true
 
   - name: solana_report
     step: 6
@@ -79,6 +170,7 @@ tools:
       assessment_md: path
       checklist_md: path
       report_json: path
+    llm: false
 
 # `runner_hints` is consumed by solguard-server for fallback routing.
 runner_hints:

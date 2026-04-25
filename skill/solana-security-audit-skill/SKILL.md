@@ -1,6 +1,6 @@
 ---
 name: solana-security-audit-skill
-version: 0.7.0
+version: 0.8.0
 license: MIT
 author: SolGuard Contributors
 description: >-
@@ -29,8 +29,14 @@ You are **SolGuard**, a Solana / Anchor / Native-Rust security auditor.
 When this skill is activated you **MUST** walk through the six-step SOP
 below in order and only emit the final report via `solana_report`.
 Every step has a strict *input / output / tool* contract. Never invent
-findings, never skip a step, never call an LLM outside
-`solana_ai_analyze`.
+findings, never skip a step.
+
+Step 5 is **skill-driven**: you (the Agent) play the L3 agents
+(A1 Explorer / A2 Checklist) and the L4 LLM gates (Gate2 / Gate3) by
+following the SOPs in `references/l3-agents-playbook.md` and
+`references/l4-judge-playbook.md`, then hand your JSON outputs to the
+deterministic thin tools (`solana_kill_signal`, `solana_cq_verdict`,
+`solana_attack_classify`, `solana_seven_q`, `solana_judge_lite`).
 
 > This skill deliberately mirrors the Solana-applicable subset of the
 > upstream `contract-audit-skill` SOP (see `LICENSE-THIRD-PARTY.md`) and
@@ -38,11 +44,11 @@ findings, never skip a step, never call an LLM outside
 
 ---
 
-## Tool contract (Phase 2 / AI-first)
+## Tool contract (Phase 2 / AI-first · v0.8 skill-driven L3/L4)
 
-The skill exposes exactly **five** tools. Input normalisation (Step 1) is
-performed **outside the skill** by the SolGuard backend (`solguard-server`)
-and passed to the Agent as `normalizedInputs[]`. The skill never shells
+The skill exposes nine tools. Input normalisation (Step 1) is performed
+**outside the skill** by the SolGuard backend (`solguard-server`) and
+passed to the Agent as `normalizedInputs[]`. The skill never shells
 out for git-clone / HTTP-fetch itself.
 
 | Tool | Python entry | Side-effects | Used in step |
@@ -50,13 +56,18 @@ out for git-clone / HTTP-fetch itself.
 | `solana_parse` | `tools.solana_parse:SolanaParseTool` | stateless Rust/Anchor regex+AST parser | 2 |
 | `solana_scan` | `tools.solana_scan:SolanaScanTool` | runs every rule in `tools/rules/`, never throws | 3 |
 | `solana_semgrep` | `tools.semgrep_runner:SemgrepRunner` | runs `tools/semgrep_rules/*.yaml` via `semgrep --json`; returns raw JSON | 4 |
-| `solana_ai_analyze` | `ai.analyzer_tool:AIAnalyzerTool` | one-shot LLM call implementing `AIAnalyzer.cross_validate_and_explore` — cross-validates scan+semgrep hints **and** explores for new vulnerabilities (temp ≤ 0.1, JSON mode) | 5 |
+| `solana_kill_signal` | `tools.solana_kill_signal:SolanaKillSignalTool` | **Gate1**, deterministic regex / AST kill-signal matcher over a candidate batch; no LLM | 5 |
+| `solana_cq_verdict` | `tools.solana_cq_verdict:SolanaCqVerdictTool` | **Gate2 落地**, deterministic post-processing of a 6-question verdict dict (you produce the dict by playing Gate-2 per `l4-judge-playbook.md`) | 5 |
+| `solana_attack_classify` | `tools.solana_attack_classify:SolanaAttackClassifyTool` | **Gate3 落地**, deterministic classifier for a 6-step attack scenario dict; KILL when CALL/RESULT empty | 5 |
+| `solana_seven_q` | `tools.solana_seven_q:SolanaSevenQTool` | **Gate4**, deterministic 7-question gate reusing Gate2/Gate3 ledger; no LLM | 5 |
+| `solana_judge_lite` | `tools.solana_judge_lite:SolanaJudgeLiteTool` | dedup + severity floor + provenance metadata; no LLM | 5 |
+| `solana_ai_analyze` | `ai.analyzer_tool:AIAnalyzerTool` | **legacy / deprecated** — single-call black-box AI analyzer kept for benchmark replay only; do **not** use in new runs | 5 (legacy) |
 | `solana_report` | `tools.solana_report:SolanaReportTool` | emits three-tier Markdown + JSON envelope, SHA-256 per artefact | 6 |
 
-All LLM traffic must go through `solana_ai_analyze` so that cost, prompt
-version and audit-trail are captured. Direct LLM calls are forbidden.
-Kill-Signal verification is an *inner loop* of `solana_ai_analyze`, not a
-separate tool.
+All Gate2 / Gate3 LLM traffic is produced by the **outer Agent** under
+the prompt templates in `references/l4-judge-playbook.md`. Cost is
+captured by the orchestrator (`solguard-server`). Kill-Signal checks
+(Gate1) and the 7-Question Gate (Gate4) are **zero-LLM**.
 
 ---
 
@@ -122,24 +133,67 @@ The Phase-2 rule set covers (see `references/vulnerability-patterns.md`):
   to `solana_ai_analyze`.
 - **Tools**: `solana_semgrep`.
 
-### Step 5 — AI Analysis with Kill-Signal (`solana_ai_analyze`)
+### Step 5 — L3 multi-view candidates + L4 four-gate judgment (skill-driven)
 
-- **Do**: one call to `AIAnalyzer.cross_validate_and_explore()` that
-  (a) *cross-validates* every scan/semgrep hint — Kill-Signal
-  counter-questions Q1-Q6 are applied inline, dropping / downgrading
-  false positives; and (b) *explores* for additional vulnerabilities
-  the rules missed, using the attacker 10-question checklist. Enforce
-  `temperature ≤ 0.1`, `json_mode=true`, and 50k total-token budget.
+Step 5 is the heart of the skill and is intentionally **Agent-driven**:
+you play A1 / A2 / Gate-2 / Gate-3 per the two playbooks and call the
+deterministic thin tools for mechanical work. **Never** shell out to
+`solana_ai_analyze` in a fresh run; that tool is frozen legacy for
+benchmark replay.
+
+#### Step 5.L3 — Layer-3 multi-view candidates
+
+Follow [`references/l3-agents-playbook.md`](./references/l3-agents-playbook.md):
+
+1. **A1 Prompt Explorer** (temperature 0.6, open prompt) — read the
+   source + `evidence_pack` and surface novel candidates.
+2. **A2 KB Checklist** (temperature 0.1, strict JSON) — iterate every
+   routed KB pattern, emit `hit | clean | uncertain`.
+3. **Merge** — dedup by `(rule_id, location)`, severity high-water-mark.
+
+Skip A2 when `parser_failed`; skip both when `bytecode_only` or
+`SOLGUARD_AI_DISABLED=1`.
+
+Output shape (fed into Step 5.L4):
+
+```json
+{
+  "candidates": [<Candidate.to_dict() ...>],
+  "l3_trace": { "a1_status": "ok", "a2_status": "ok", "merge_stats": {...} }
+}
+```
+
+#### Step 5.L4 — Layer-4 four-gate judgment
+
+Follow [`references/l4-judge-playbook.md`](./references/l4-judge-playbook.md):
+
+| Gate | Agent role | Tool to call | LLM? |
+|------|-----------|--------------|------|
+| **Gate 1** Kill-Signal | none | `solana_kill_signal` | no |
+| **Gate 2** Counter-Question 6 问 | you play Gate-2 per §2 → produce `verdict_json` | `solana_cq_verdict` | **yes** (Agent) |
+| **Gate 3** Attack Scenario 6 步 | you play Gate-3 per §3 → produce `scenario_json` | `solana_attack_classify` | **yes** (Agent) |
+| **Gate 4** 7-Question Gate | none | `solana_seven_q` | no |
+| Post-proc | none | `solana_judge_lite` | no |
+
+Gate 2 is **mandatory** on every High / Critical candidate (plan
+decision 2). Gate 3 is **mandatory** on every High / Critical candidate
+that survives Gate 2 (plan decision 3).
+
+Medium-severity sampling rate for Gate 2 defaults to `0.25` using the
+deterministic hash `(idx * 2654435761) & 0xFFFF / 0xFFFF < rate`;
+Low / Info skip Gate 2 and Gate 3.
+
 - **Input**: `parsed.json` + `scan_result.json` + `semgrep_raw.json`
-  + evidence excerpts ≤ 200 LoC per file.
-- **Output**: `findings.verified.json` with merged rule / semgrep /
-  ai findings, each carrying `confidence: float`,
-  `kill_signal: { is_valid, reason }`, and `source: "rule|semgrep|ai"`.
-- **Tools**: `solana_ai_analyze`.
+  + `evidence_pack`; L3 candidates are produced in-session.
+- **Output**: `findings.verified.json` — every survivor carries
+  `confidence`, `kill_signal.gate_traces` (Gate1..Gate4 ledger), and
+  `source: "A1|A2|rule|semgrep"`.
 
-If the LLM call fails (rate-limit, API outage, budget exceeded) the
-tool returns `{ decision: "degraded", reason: "..." }` and Step 6 still
-produces a DEGRADED report from rule / semgrep hints alone.
+Degradation: if any LLM call fails (rate-limit, API outage, budget
+exceeded) that individual gate records `applied: false, reason: "..."`
+and the candidate continues through the deterministic gates. The run
+is flagged `decision: "degraded"` only when **zero** Gate-2 / Gate-3
+LLM calls succeeded across the whole target.
 
 ### Step 6 — Report Generation (`solana_report`)
 
@@ -470,7 +524,12 @@ pub state: Account<'info, State>,
 
 ---
 
-## `solana_ai_analyze` — parameter reference
+## `solana_ai_analyze` — legacy parameter reference (deprecated)
+
+> **Deprecated since v0.8.** Kept only to replay archived benchmark
+> runs. In production, play the L3+L4 SOPs per the two playbooks and
+> call the thin tools listed in the Tool-contract table. New prompts
+> must not be wired through this entry point.
 
 Invocation signature (Python):
 
@@ -583,9 +642,18 @@ SolanaReportTool().run(verified=ai, out_dir="/tmp/sg/out")
 
 ## References (read on demand — do NOT load upfront)
 
+- [`references/l3-agents-playbook.md`](./references/l3-agents-playbook.md) —
+  **Step 5.L3 SOP**: A1 Explorer prompt, A2 Checklist prompt, merge
+  rules, skip conditions. Authoritative for how you (the Agent) play
+  A1 / A2.
+- [`references/l4-judge-playbook.md`](./references/l4-judge-playbook.md) —
+  **Step 5.L4 SOP**: Gate1..Gate4 flow, 6-question Counter-Question
+  prompt, 6-step Attack-Scenario template, cost guardrails, thin-tool
+  call sequence.
 - [`references/workflow.md`](./references/workflow.md) — granular
   per-step procedure, attacker 10-questions, sibling-function audit,
-  Kill-Signal counter-questions.
+  Kill-Signal counter-questions (historical; L3/L4 subset is now in
+  the two playbooks above).
 - [`references/vulnerability-patterns.md`](./references/vulnerability-patterns.md) —
   the 7 Solana rules, each with Bad vs Good code, severity, and
   detection heuristics.

@@ -88,20 +88,35 @@ ${moreInfoBlock}`
 
 ## 执行要求
 
-严格按照 ${skillDir}/SKILL.md 的 6 步 AI-first 工作流执行，所有 LLM 分析必须通过 solana_ai_analyze 工具；**不要**自行正则解析源码、**不要**直接调用 LLM。
+严格按照 ${skillDir}/SKILL.md 的 6 步 **skill-first** 工作流执行；Step 5 的 L3/L4 由你（外层 Agent）**按 playbook 自主扮演**，只调用 skill 暴露的确定性 tool 做落地。**不要**自行正则解析源码，**不要**在 playbook 外独立调 LLM（每一轮 LLM 调用必须能在 \`l3-agents-playbook.md\` 或 \`l4-judge-playbook.md\` 找到对应 §）。
 工作目录: ${workdir}
 报告输出: ${outputRoot}
 
-依次调用以下 5 个工具（严格顺序 / 跳步即失败）：
-1. solana_parse        — 解析每个 rust_source 的 Rust / Anchor 结构
-2. solana_scan         — 产出 7 条规则的 hints（confidence=low，待 AI 裁判）
-3. solana_semgrep      — 运行 Solana Semgrep 规则，原始 JSON 直喂 AI
-4. solana_ai_analyze   — 一次调用完成「交叉验证 scan/semgrep hints」+「探索式补漏」（对应
-                          AIAnalyzer.cross_validate_and_explore，内含 Kill-Signal 验证；
-                          temperature ≤ 0.1，JSON mode）
-5. solana_report       — 按 AI 产出的 Markdown 三段落盘 + sha256 + report.json
+### Step 2-4 · 确定性信号采集（严格顺序，跳步即失败）
+1. \`solana_parse\`        — 解析每个 rust_source 的 Rust / Anchor 结构
+2. \`solana_scan\`         — 产出规则 hints（confidence=low，等待 Gate1/2/3 裁判）
+3. \`solana_semgrep\`      — 运行 Solana Semgrep 规则，原始 JSON 供 L3/L4 使用
 
-对 normalizedInputs[].kind != rust_source 的条目，跳过 parse/scan/semgrep 直接交 solana_ai_analyze 处理 DEGRADED 路径；solana_report 在 scan_result.decision=degraded 时仍出 risk_summary.md，顶部写入 "DEGRADED — LLM unavailable" 或 "DEGRADED — source unavailable"。
+### Step 5.L3 · 多视角候选（读 \`${skillDir}/references/l3-agents-playbook.md\`）
+- 扮演 **A1 Prompt Explorer**（temperature 0.6，开放式提示）产出 candidates
+- 扮演 **A2 KB Checklist**（temperature 0.1，逐条 KB pattern 判 hit/clean/uncertain）产出 candidates
+- 按 playbook §Merge 规则去重 \`(rule_id, location)\`；冲突 severity 取高
+
+### Step 5.L4 · 四闸研判（读 \`${skillDir}/references/l4-judge-playbook.md\`）
+依次运行：
+1. \`solana_kill_signal\`      — Gate1 确定性正则 / AST kill-signal 过滤
+2. **Gate2 Counter-Question** — 你扮演 6 问（每条 High/Critical 必过，playbook §2 的 system+user prompt）；随后 \`solana_cq_verdict\` 落地 kill/downgrade/keep
+3. **Gate3 Attack Scenario**  — 你扮演 6 步 SETUP/CALL/RESULT/COST/DETECT/NET-ROI（playbook §3）；随后 \`solana_attack_classify\` 判 CALL/RESULT 是否为空、NET ROI 情感
+4. \`solana_seven_q\`          — Gate4 七问确定性组合门
+5. \`solana_judge_lite\`       — dedup + severity floor + provenance 元数据
+
+### Step 6 · 报告
+6. \`solana_report\` — 按合并后的 findings 输出三段 Markdown + \`report.json\` + 每个 artefact 的 SHA-256
+
+### DEGRADED 路径
+对 \`normalizedInputs[].kind != rust_source\` 的条目：跳过 parse/scan/semgrep/L3/L4，直接走 \`solana_report\` 的 DEGRADED 模板；顶部写入 "DEGRADED — source unavailable"。当 LLM provider 不可用时，Step 5.L3/L4 自动降级为"只跑确定性 Gate1/Gate4 + judge_lite"，报告顶部标注 "DEGRADED — LLM unavailable"。
+
+> Legacy：\`solana_ai_analyze\` 仍保留在 skill 清单但已 \`deprecated: true\`，仅用于重跑旧 benchmark，**新运行不得使用**。
 
 ## 完成动作
 
@@ -145,10 +160,17 @@ Body:
 }
 
 const TOOL_STATUS_MAP: Record<string, { status: TaskStatus; progress: string; percent: number }> = {
-  solana_parse: { status: 'scanning', progress: 'Parsing Rust / Anchor AST...', percent: 25 },
-  solana_scan: { status: 'scanning', progress: 'Running rule scanner...', percent: 40 },
-  solana_semgrep: { status: 'scanning', progress: 'Running semgrep rules...', percent: 55 },
-  solana_ai_analyze: { status: 'analyzing', progress: 'AI cross-validation + exploration...', percent: 75 },
+  solana_parse: { status: 'scanning', progress: 'Parsing Rust / Anchor AST...', percent: 20 },
+  solana_scan: { status: 'scanning', progress: 'Running rule scanner...', percent: 35 },
+  solana_semgrep: { status: 'scanning', progress: 'Running semgrep rules...', percent: 45 },
+  solana_kill_signal: { status: 'analyzing', progress: 'Gate1 — kill-signal filter...', percent: 60 },
+  solana_cq_verdict: { status: 'analyzing', progress: 'Gate2 — counter-question landing...', percent: 70 },
+  solana_attack_classify: { status: 'analyzing', progress: 'Gate3 — attack scenario classify...', percent: 80 },
+  solana_seven_q: { status: 'analyzing', progress: 'Gate4 — seven-question gate...', percent: 88 },
+  solana_judge_lite: { status: 'analyzing', progress: 'Judge lite — dedup + floor...', percent: 92 },
+  // Legacy single-call analyzer — deprecated but still accepted during
+  // benchmark replays; keep its progress mapping so old jobs still update.
+  solana_ai_analyze: { status: 'analyzing', progress: 'AI cross-validation + exploration (legacy)...', percent: 75 },
   solana_report: { status: 'reporting', progress: 'Composing report...', percent: 95 },
 };
 

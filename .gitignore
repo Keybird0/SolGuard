@@ -76,3 +76,6 @@ test-ledger/
 
 # ============ Docker ============
 *.local.tar
+
+# ============ Playwright CLI logs ============
+.playwright-cli/

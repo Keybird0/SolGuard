@@ -740,6 +740,11 @@ def _benchmark_summary(
         else:
             missing.append(expected)
     total = len(_SEALEVEL_EXPECTED_CLASSES)
+
+    # Skill-driven L3/L4 now lives outside this script — per-gate KILL
+    # distribution, candidate counts, and audit mode counters are
+    # recorded by the OpenHarness Agent trace (see
+    # references/l4-judge-playbook.md §Trace), not aggregated here.
     return {
         "benchmark": "sealevel-attacks-like",
         "expected_classes": sorted(_SEALEVEL_EXPECTED_CLASSES),
@@ -939,12 +944,18 @@ def _audit_one_target(
 
     ai_status = "skipped"
     ai_payload: dict[str, Any] = {"confirmed": [], "exploratory": [], "rejected": []}
+
     if force_degraded or provider is None:
         ai_status = "skipped_no_key" if provider is None else "skipped_forced_degraded"
         ai_payload["error"] = "no LLM provider configured (degraded mode)"
     else:
+        # Legacy single-call ``AIAnalyzer`` path (kept for benchmark replay).
+        # In production, skill-driven orchestration goes through the
+        # OpenHarness Agent + thin L3/L4 tools per references/l3-agents-playbook.md
+        # and references/l4-judge-playbook.md; this script only exercises
+        # the legacy path so existing smoke tests / benchmarks stay stable.
         if emit_events:
-            _emit_stage("ai_analyze", provider=provider, file=file_str)
+            _emit_stage("ai_analyze", provider=provider, file=file_str, mode="legacy")
         analyzer = AIAnalyzer(provider=provider)
         extra = _build_target_context(
             target,

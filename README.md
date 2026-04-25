@@ -27,7 +27,7 @@ Professional Solana security audits cost **$50,000+** and take **2–4 weeks**.
 |---|---|---|
 | Cost | $50,000+ | 0.001 SOL (~$0.20) per target |
 | Turnaround | 2–4 weeks | < 5 min |
-| Coverage | Deep, human | 7 deterministic rules + AI cross-validation |
+| Coverage | Deep, human | 7 deterministic rules + skill-first L3/L4 AI judgment (4 gates + 5 thin tools) |
 | Availability | Booking required | 24/7 self-serve |
 
 ---
@@ -50,11 +50,11 @@ Click **[solguard-demo.vercel.app](https://solguard-demo.vercel.app/)** — a fu
 
 - **4 input types** — GitHub repo · on-chain program address · whitepaper URL · project website
 - **7 Solana-specific rules** — Missing Signer Check · Missing Owner Check · Arbitrary CPI · Integer Overflow · Account Data Matching · PDA Derivation Error · Uninitialized Account
-- **AI deep analysis + Kill Signal** — LLM-powered reasoning cross-validates rule hits to cut false positives (Phase 6 precision on Sealevel-benchmark: 88%, recall: 79%)
+- **Skill-first L3/L4 AI judgment** (v0.8) — Agent plays *A1 Prompt Explorer* + *A2 KB Checklist* per `references/l3-agents-playbook.md`, then runs the 4-gate L4 (Kill-Signal → Counter-Question 6Q → Attack Scenario 6-step → 7-Question Gate) per `l4-judge-playbook.md`; five deterministic Python *thin tools* land every gate's verdict with zero LLM surprises. Phase 6 baseline → round 2 lifted F1 from **0.46 → 0.71** (recall **0.71 → 0.94**, precision **0.34 → 0.57**), avg run **12.9 s → 11.4 s**.
 - **3-tier report** — Risk Summary (executive) · Contract Assessment (technical) · Audit Checklist (actionable)
 - **Solana Pay checkout** — native in-wallet payment in < 10 seconds, Devnet or Mainnet
 - **Email delivery + feedback loop** — reports sent to your inbox; signed feedback closes the loop
-- **Batch submissions** — audit up to 3 targets in one atomic payment
+- **Batch submissions** — audit up to 5 targets in one atomic payment (frontend-enforced; the backend schema accepts 1–5)
 - **Swagger / OpenAPI 3** — machine-readable API spec at [`solguard-server/openapi.yaml`](./solguard-server/openapi.yaml)
 
 ---
@@ -65,9 +65,11 @@ Click **[solguard-demo.vercel.app](https://solguard-demo.vercel.app/)** — a fu
 flowchart LR
     U[User Browser] -->|REST / Solana Pay| W[Web UI · public/]
     W -->|fetch /api/*| S[Express Server<br/>Node ≥ 20]
-    S -->|spawn / CLI| A[OpenHarness Agent<br/>Python ≥ 3.11]
-    A -->|Skill: solana-security-audit-skill| T[7 rules + AI analyzer]
-    T -->|3-tier report| S
+    S -->|spawn / CLI| A[OpenHarness Agent<br/>Python ≥ 3.11<br/>reads SKILL.md + playbooks]
+    A -->|Step 2-4 deterministic| D[parse · scan · semgrep]
+    A -->|Step 5 skill-driven| L[L3 A1 + A2<br/>L4 Gate1…Gate4]
+    L -->|thin-tool verdicts| A
+    A -->|Step 6 solana_report| S
     S -->|SMTP| E[(Email)]
     S -->|Solana Pay poller| C[(Solana Devnet<br/>Mainnet)]
 
@@ -76,6 +78,8 @@ flowchart LR
       W2[Web UI · same files] -->|demo-shim.js intercepts| M[(Pre-generated<br/>/demo-data/*)]
     end
 ```
+
+Step 5 is **skill-driven**: the Agent itself plays A1 / A2 / Gate-2 / Gate-3 per two markdown playbooks, and five deterministic thin tools (`solana_kill_signal` / `solana_cq_verdict` / `solana_attack_classify` / `solana_seven_q` / `solana_judge_lite`) land every verdict. Legacy `solana_ai_analyze` is kept `deprecated:true` only for benchmark replay.
 
 Full architecture + ADRs: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
@@ -92,14 +96,16 @@ SolGuard/
 │   └── openapi.yaml                # OpenAPI 3 spec
 ├── skill/
 │   └── solana-security-audit-skill/
-│       ├── SKILL.md                # Skill definition + audit SOP
-│       ├── tools/                  # solana_parse · solana_scan · solana_ai_analyze · solana_report
+│       ├── SKILL.md                # Skill-first SOP · v0.8 · nine tools
+│       ├── skill.yaml              # tool manifest for OpenHarness & fallback runner
+│       ├── tools/                  # solana_parse · solana_scan · solana_semgrep · solana_kill_signal
+│       │   │                        #  · solana_cq_verdict · solana_attack_classify · solana_seven_q
+│       │   │                        #  · solana_judge_lite · solana_report (+ solana_ai_analyze deprecated)
 │       │   └── rules/              # 7 security rules
-│       ├── ai/                     # LLM analyzer + prompts
-│       ├── core/                   # types + utilities
-│       ├── reporters/              # 3-tier report generators
-│       ├── references/             # vulnerability patterns + templates
-│       └── tests/
+│       ├── ai/                     # judge/ (Gate1 + Gate4 + llm_shim) · analyzer.py (legacy)
+│       │   └── agents/             # Candidate dataclass only — A1/A2 logic lives in playbooks
+│       ├── references/             # l3-agents-playbook · l4-judge-playbook · vuln patterns · templates
+│       └── tests/                  # 107 pass / 2 skip · incl. test_skill_playbook_smoke.py e2e
 ├── test-fixtures/                  # seed + real-world benchmark contracts
 ├── scripts/                        # verify · setup · deploy · benchmark
 ├── docs/
@@ -195,7 +201,7 @@ Full guide: [`docs/USAGE.md`](./docs/USAGE.md) (English) / [`docs/USAGE.zh-CN.md
 
 ## Supported Vulnerabilities
 
-Rules are implemented in [`skill/solana-security-audit-skill/tools/rules/`](./skill/solana-security-audit-skill/tools/rules/) and validated against the Sealevel-Attacks corpus + 16 real-world fixtures.
+Rules are implemented in [`skill/solana-security-audit-skill/tools/rules/`](./skill/solana-security-audit-skill/tools/rules/) and validated on 17 fixtures (12 real-world + 5 seed) from the Sealevel-Attacks-like corpus. Each rule hit is low-confidence by design — the final call comes from the skill-first L3/L4 judgment in Step 5.
 
 | # | Rule | Severity | Status |
 |---|------|----------|--------|
@@ -209,6 +215,32 @@ Rules are implemented in [`skill/solana-security-audit-skill/tools/rules/`](./sk
 
 Deep-dive per rule (definition · bad/good code · detection notes · external refs): [`docs/knowledge/solana-vulnerabilities.md`](./docs/knowledge/solana-vulnerabilities.md).
 
+### Skill-first L3/L4 judgment pipeline (Step 5, v0.8)
+
+The M1 Step-5 "one black-box LLM call" was refactored into two markdown playbooks + five deterministic thin tools in April 2026. The Agent plays A1 / A2 / Gate-2 / Gate-3 directly; Python only does the mechanical landing work.
+
+| Stage | Plays | Tool | LLM? |
+|---|---|---|---|
+| L3 · A1 Prompt Explorer (temp 0.6, open prompt) | Agent per `references/l3-agents-playbook.md §A1` | — | yes (Agent) |
+| L3 · A2 KB Checklist (temp 0.1, strict JSON) | Agent per `l3-agents-playbook.md §A2` | — | yes (Agent) |
+| L3 · Merge | Agent (dedup by `(rule_id, location)` + severity high-water-mark) | — | no |
+| L4 Gate 1 · Kill Signal | regex + AST over KB `kill_signals[]` | `solana_kill_signal` | no |
+| L4 Gate 2 · Counter-Question 6Q | Agent per `l4-judge-playbook.md §2`; mandatory on every High/Critical | `solana_cq_verdict` lands the kill/downgrade/keep action table | yes (Agent) |
+| L4 Gate 3 · Attack Scenario 6-step | Agent per `l4-judge-playbook.md §3`; empty CALL / RESULT ⇒ KILL; negative NET-ROI ⇒ DOWNGRADE | `solana_attack_classify` | yes (Agent) |
+| L4 Gate 4 · 7-Question Gate | deterministic 7-question composition (reuses Gate 2 / Gate 3 ledger) | `solana_seven_q` | no |
+| Post-proc | dedup + severity floor + provenance metadata | `solana_judge_lite` | no |
+
+**Phase 6 impact** (on 17 fixtures, `round2-prompt` cold run):
+
+| Aggregate | baseline | round 2 | Δ |
+|---|---:|---:|---:|
+| Precision | 0.34 | 0.57 | **+0.23** |
+| Recall | 0.71 | 0.94 | **+0.23** |
+| F1 | 0.46 | 0.71 | **+0.25** |
+| Avg seconds / fixture | 12.88 | 11.39 | **−1.49** |
+
+Full breakdown: [`outputs/phase6-comparison.md`](./outputs/phase6-comparison.md).
+
 ---
 
 ## API
@@ -219,7 +251,7 @@ Key endpoints:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/audit` | Submit a batch of up to 3 targets |
+| `POST` | `/api/audit` | Submit a batch of 1–5 targets |
 | `GET` | `/api/audit/batch/:batchId` | Poll batch status + per-task progress |
 | `POST` | `/api/audit/batch/:batchId/payment` | Submit a Solana Pay signature for verification |
 | `GET` | `/api/audit/:taskId/report.md` | Fetch the 3-tier Markdown report |
@@ -237,9 +269,19 @@ Key endpoints:
 - **Phase 4** — Web UI ✅
 - **Phase 5** — Integration + deployment ✅
 - **Phase 6** — Benchmark + accuracy tuning ✅
-- **Phase 7** — Docs + demo + submission (May 11, 2026) 🚧
+- **Phase 7** — Docs + demo + submission 🚧 (10/12 ✅ · video + GitHub Release + hackathon form held for manual execution)
+- **M1 · Skill-first L3/L4 refactor (2026-04-25)** ✅ — two markdown playbooks + five deterministic thin tools replace the single `solana_ai_analyze` black box; net −1100 lines of Python / +600 lines of Agent-readable SOP.
 
-See full plan in [`docs/04-SolGuard项目管理/`](../docs/04-SolGuard%E9%A1%B9%E7%9B%AE%E7%AE%A1%E7%90%86/).
+**Forward-looking optimisation themes** (non-binding, evaluated against the skill-first baseline):
+
+1. **M2 · A3 deep-dive agent** — per the plan, A3 will also land as a playbook (`references/l3-agents-playbook.md §A3`) that feeds AST call-graph slices for risky handlers; keeps Python to helper thin tools.
+2. **M3 · RAG / memory** — orthogonal to the skill-first refactor; plug into A2 Checklist to retrieve pattern-specific exemplars from `references/vulnerability-patterns.md` and past audits.
+3. **Benchmark determinism** — Gate 2 / Gate 3 now carry LLM variance; if future hackathons need hard reproducibility, pin `round2-prompt` results via the legacy `solana_ai_analyze` path (still available under `deprecated:true`).
+4. **Cost guardrails** — per-task budget (`SOLANA_AUDIT_BUDGET`) and Medium-severity sampling rate (`0.25` by default in `l4-judge-playbook.md §2.5`) are the two levers; today there is no per-project budget accounting.
+5. **Frontend polish** — keep the UI aligned with 1–5 target batches; add per-gate status beacons in the progress stepper so users can see "Gate 2 · 3/5 done".
+6. **Security hardening** — `ai/judge/kill_signal.py` still falls back to file-wide scope when a candidate's line isn't inside a function / account struct; consider tightening to "skip match" instead of "file" to cut over-killing (see the smoke-test debug notes in `docs/04-SolGuard项目管理/03-Phase2-Skill与工具开发.md §架构演进`).
+
+See the full plan + milestones in [`docs/04-SolGuard项目管理/`](../docs/04-SolGuard%E9%A1%B9%E7%9B%AE%E7%AE%A1%E7%90%86/) and the iteration evaluation in [`docs/03-现有材料与项目规划/03-SolGuard项目开发规划.md §13`](../docs/03-%E7%8E%B0%E6%9C%89%E6%9D%90%E6%96%99%E4%B8%8E%E9%A1%B9%E7%9B%AE%E8%A7%84%E5%88%92/03-SolGuard%E9%A1%B9%E7%9B%AE%E5%BC%80%E5%8F%91%E8%A7%84%E5%88%92.md).
 
 ---
 

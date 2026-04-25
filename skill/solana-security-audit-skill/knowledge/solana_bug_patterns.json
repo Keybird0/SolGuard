@@ -1,5 +1,38 @@
 {
-  "version": "kb-lite.2026-04-25",
+  "version": "kb-gates.2026-04-25",
+  "schema_notes": {
+    "kill_signals": "Per-pattern deterministic regex checks. Semantics: if ANY signal fires on the target source within `scope`, the candidate finding for this pattern is marked as safely excluded (Gate1 KILL). Each signal records `kind`, `pattern`, `scope`, `semantics`.",
+    "counter_questions": "Global six-question reverse validation (workflow.md §6). Asked verbatim to the LLM for every High/Critical finding; any YES triggers downgrade or KILL (Gate2).",
+    "counter_question_hints": "Per-pattern Solana-specific guidance for how to answer each of the six counter_questions. Fed into Gate2 prompt.",
+    "attack_scenario_template": "Per-pattern SETUP/CALL/RESULT/COST/DETECT/NET_ROI skeleton (audit-sop.md §4.3.3). Fed into Gate3 prompt. CALL or RESULT empty after LLM fill ⇒ Gate3 KILL.",
+    "scope_values": "`struct` = #[derive(Accounts)] block, `function_body` = pub fn body that owns the finding, `file` = whole source text"
+  },
+  "counter_questions": [
+    {
+      "id": "q1_upstream_check",
+      "text": "Is there an upstream check I missed that actually prevents this?"
+    },
+    {
+      "id": "q2_intended_behavior",
+      "text": "Is this documented intended behavior (program comment, design decision, on-chain governance)?"
+    },
+    {
+      "id": "q3_admin_only",
+      "text": "Does exploitation require admin/privileged access (multisig, upgrade authority, on-chain governance)?"
+    },
+    {
+      "id": "q4_economic",
+      "text": "Is the economic cost to exploit greater than the attacker's gain?"
+    },
+    {
+      "id": "q5_ack_by_prior_audit",
+      "text": "Was this flagged in a prior audit as acknowledged / risk-accepted?"
+    },
+    {
+      "id": "q6_public_data",
+      "text": "Is the sensitive data or action already publicly visible / intended to be callable by anyone?"
+    }
+  ],
   "patterns": [
     {
       "id": "missing_signer_check",
@@ -11,7 +44,53 @@
       "source_regex": ["authority\\s*:\\s*AccountInfo", "#\\[account\\([^\\]]*signer"],
       "why_it_matters": "Authority-like AccountInfo fields without Signer or #[account(signer)] let callers spoof the authority account.",
       "look_for": ["authority/admin/owner fields typed as AccountInfo", "token transfer authorities used without signer checks"],
-      "fix": "Use Signer<'info>, #[account(signer)], or an explicit is_signer/require check before privileged actions."
+      "fix": "Use Signer<'info>, #[account(signer)], or an explicit is_signer/require check before privileged actions.",
+      "kill_signals": [
+        {
+          "id": "anchor_signer_type",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "(?:authority|admin|owner|signer|user)\\s*:\\s*Signer\\s*<",
+          "semantics": "Authority-like field is typed as Signer<'info>; Anchor asserts signature at deserialize time."
+        },
+        {
+          "id": "anchor_signer_attr",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*\\bsigner\\b",
+          "semantics": "Anchor #[account(signer)] attribute enforces signer check."
+        },
+        {
+          "id": "manual_is_signer_guard",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:!\\s*ctx\\.accounts\\.\\w+\\.is_signer|require!\\s*\\(\\s*ctx\\.accounts\\.\\w+\\.is_signer|ctx\\.accounts\\.\\w+\\.is_signer\\s*(?:\\)|,)\\s*(?:\\?|\\|\\|))",
+          "semantics": "Explicit is_signer guard before privileged code path."
+        },
+        {
+          "id": "require_keys_eq_admin",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "require_keys_eq!\\s*\\(\\s*ctx\\.accounts\\.\\w+\\.key\\(\\)",
+          "semantics": "require_keys_eq! pins the authority account to a fixed pubkey, preventing arbitrary-caller spoof."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for Signer<'info>/#[account(signer)] on the same field, or require_keys_eq!/is_signer in the function body (incl. shared helpers).",
+        "q2_intended_behavior": "Check program doc-comments for 'permissionless' / 'read-only' intent. Log-only functions without state mutation may be intentionally unsigned.",
+        "q3_admin_only": "If the missing-signer field maps to an admin pubkey verified via require_keys_eq!, exploitation requires spoofing that fixed key — usually infeasible.",
+        "q4_economic": "If the impacted instruction moves funds or updates authority, gain >> cost. If it only writes logs, treat as Info.",
+        "q5_ack_by_prior_audit": "Cross-reference prior SolGuard reports in outputs/memory (if any) for acknowledged signer-spoof notes.",
+        "q6_public_data": "If the instruction reads public state only (e.g., logs), the 'spoof' has no security impact."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker controls any fresh keypair (no funding needed beyond rent exemption).",
+        "call_hint": "Attacker invokes `<instruction>` passing their keypair as the `authority` account. No signature required because the struct uses `AccountInfo<'info>`.",
+        "result_hint": "Attacker is accepted as the authority and can trigger the privileged action (fund withdrawal, state mutation, authority rotation).",
+        "typical_cost": "~5 000 lamports transaction fee; no flash-loan or bonding needed on Solana.",
+        "typical_detect": "Program has no runtime guard; off-chain monitors are the only line of defense.",
+        "typical_net_roi": "If the privileged action moves value ≥ 0.01 SOL, ROI > 1 — exploit is profitable."
+      }
     },
     {
       "id": "missing_owner_check",
@@ -23,7 +102,46 @@
       "source_regex": ["\\.owner", "try_from_slice|deserialize|unpack_unchecked"],
       "why_it_matters": "Raw AccountInfo data can be deserialized from accounts owned by other programs unless owner is checked first.",
       "look_for": ["AccountInfo deserialization", "mutable raw accounts", "absence of owner == program_id checks"],
-      "fix": "Use Account<'info, T> or require the account owner to equal the expected program id before reading or writing."
+      "fix": "Use Account<'info, T> or require the account owner to equal the expected program id before reading or writing.",
+      "kill_signals": [
+        {
+          "id": "anchor_account_wrapper",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "\\w+\\s*:\\s*Account\\s*<\\s*'info\\s*,\\s*\\w+",
+          "semantics": "Anchor Account<'info, T> asserts both owner == declare_id and discriminator match."
+        },
+        {
+          "id": "owner_attr_constraint",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*\\bowner\\s*=",
+          "semantics": "Explicit #[account(owner = ...)] constraint lets Anchor assert owner automatically."
+        },
+        {
+          "id": "manual_owner_equality",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:require_keys_eq!\\s*\\(\\s*[^,]+\\.owner[^,]*,|(?:if|\\!)\\s*\\**\\s*\\w+\\.owner\\s*!?==\\s*)",
+          "semantics": "Manual owner-equality check against expected program id before trusting data."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Search for Account<'info, T>, #[account(owner = ...)], or an explicit *account.owner == crate::ID comparison in the function body.",
+        "q2_intended_behavior": "Cross-program data reads (oracles, registry lookups) may be intentional — but they should still verify the owner is the expected program.",
+        "q3_admin_only": "Owner checks almost never require admin privilege; deserialization bugs exploitable by any caller.",
+        "q4_economic": "If the deserialized struct governs funds / PDA derivations, exploitation is highly profitable.",
+        "q5_ack_by_prior_audit": "Rare in prior audits; assume new unless explicitly annotated.",
+        "q6_public_data": "Data stored in program state is on-chain-public, but trust semantics are violated when owner is forged — it is NOT a privacy issue."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker deploys a malicious program that writes crafted bytes matching the victim's struct layout to an account they own.",
+        "call_hint": "Attacker invokes `<instruction>` passing their attacker-owned account in the AccountInfo slot that gets manually deserialized.",
+        "result_hint": "Victim program treats attacker-owned data as authentic (forged authority keys, bogus balances, poisoned state).",
+        "typical_cost": "Deploy cost of crafted account: ~0.002 SOL rent; transaction fee negligible.",
+        "typical_detect": "No on-chain guard (that's the bug); only off-chain monitors see anomalous callers.",
+        "typical_net_roi": "ROI unbounded if trusted fields like `authority: Pubkey` are spoofable — attacker can hijack any downstream action."
+      }
     },
     {
       "id": "account_data_matching",
@@ -35,7 +153,46 @@
       "source_regex": ["try_from_slice|deserialize|unpack_unchecked"],
       "why_it_matters": "Programs must bind deserialized account data to the expected discriminator, owner, and semantic identity.",
       "look_for": ["manual deserialization into trusted structs", "missing discriminator or key equality checks"],
-      "fix": "Use Anchor Account<T> or explicitly validate discriminator, owner, and expected keys before trusting fields."
+      "fix": "Use Anchor Account<T> or explicitly validate discriminator, owner, and expected keys before trusting fields.",
+      "kill_signals": [
+        {
+          "id": "anchor_account_wrapper",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "\\w+\\s*:\\s*Account\\s*<\\s*'info\\s*,\\s*\\w+",
+          "semantics": "Anchor Account<'info, T> asserts discriminator + owner."
+        },
+        {
+          "id": "discriminator_guard",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:discriminator|DISCRIMINATOR|&\\s*data\\[0\\s*\\.\\.\\s*8\\])",
+          "semantics": "Explicit discriminator check on the first 8 bytes before deserialization."
+        },
+        {
+          "id": "identity_key_eq",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "require_keys_eq!\\s*\\(\\s*\\w+\\.(?:authority|owner|mint|delegate)\\s*,",
+          "semantics": "require_keys_eq! binds deserialized struct's identity field to an expected pubkey."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for Account<T> wrapper, discriminator comparison, or identity field binding (require_keys_eq!).",
+        "q2_intended_behavior": "Very rarely intentional; manual deserialization without identity check is almost always a defect.",
+        "q3_admin_only": "No admin required — any caller can pass a spoofed struct.",
+        "q4_economic": "High ROI whenever the struct fields steer value transfers or authority decisions.",
+        "q5_ack_by_prior_audit": "Check outputs/memory for type-cosplay acknowledgements.",
+        "q6_public_data": "N/A — this is an integrity bug, not a disclosure bug."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker creates an account of type A where the same program (or a sister program) also expects type B; byte layout happens to overlap on critical fields.",
+        "call_hint": "Attacker invokes `<instruction>` that deserializes into type B; since identity isn't bound, B's fields resolve to attacker-controlled values.",
+        "result_hint": "Attacker's fake B passes validation; downstream logic trusts its authority/balance/flag fields.",
+        "typical_cost": "Rent for the decoy account: <= 0.005 SOL.",
+        "typical_detect": "None at runtime.",
+        "typical_net_roi": "High whenever the downstream function is state-mutating."
+      }
     },
     {
       "id": "arbitrary_cpi",
@@ -47,7 +204,46 @@
       "source_regex": ["ctx\\.accounts\\.[A-Za-z_]+\\.key", "spl_token::instruction::[A-Za-z_]+"],
       "why_it_matters": "If a CPI program id comes from user-controlled accounts, attackers can route trusted account metas to malicious programs.",
       "look_for": ["program_id sourced from ctx.accounts", "token_program typed as AccountInfo", "missing equality check against known program id"],
-      "fix": "Use Program<'info, Token> or require_keys_eq!(program.key(), spl_token::ID) before invoking."
+      "fix": "Use Program<'info, Token> or require_keys_eq!(program.key(), spl_token::ID) before invoking.",
+      "kill_signals": [
+        {
+          "id": "program_wrapper_typed",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "\\w+\\s*:\\s*Program\\s*<\\s*'info\\s*,",
+          "semantics": "Anchor Program<'info, X> enforces canonical program id (spl_token::ID, system_program::ID, ...)."
+        },
+        {
+          "id": "program_id_pin",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "require_keys_eq!\\s*\\(\\s*ctx\\.accounts\\.\\w+\\.key\\(\\)\\s*,\\s*(?:anchor_spl::\\w+::ID|\\w+_program::ID|\\w+::ID)",
+          "semantics": "require_keys_eq! binds the target program to a known canonical id before the invoke."
+        },
+        {
+          "id": "hardcoded_cpi_target",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "invoke(?:_signed)?\\s*\\(\\s*&\\s*(?:anchor_spl::\\w+::|\\w+_program::|spl_token::instruction::)",
+          "semantics": "CPI target is a hard-coded canonical module path (not user-supplied account)."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for Program<'info, X> typing, require_keys_eq!(target.key(), <ID>) immediately before invoke, or hard-coded instruction path (spl_token::instruction::transfer).",
+        "q2_intended_behavior": "Routers/aggregators sometimes accept user-provided target programs by design — but a whitelist must still exist.",
+        "q3_admin_only": "Admin-only arbitrary-CPI is still catastrophic (admin rug risk); do not downgrade on Q3 alone.",
+        "q4_economic": "Trivial to exploit with a minimal attacker program; cost is dwarfed by the accessible account deltas.",
+        "q5_ack_by_prior_audit": "Very rarely accepted; treat as new.",
+        "q6_public_data": "N/A."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker deploys a malicious program whose entrypoint accepts the same account metas as the target CPI (e.g. a fake SPL-token).",
+        "call_hint": "Attacker invokes `<instruction>` passing their fake program as the `token_program` / `target_program` account and the victim program as one of the account metas with attacker-friendly authority.",
+        "result_hint": "Victim program delegates authority to attacker's code, which drains the token vault (or performs any arbitrary action with victim's signer seeds).",
+        "typical_cost": "Deploy cost of malicious program: 0.01–0.1 SOL one-off.",
+        "typical_detect": "None at runtime; funds are already in attacker custody by the time off-chain monitors fire.",
+        "typical_net_roi": "ROI = entire exposed vault / deploy cost ⇒ typically ≫ 1."
+      }
     },
     {
       "id": "pda_derivation_error",
@@ -59,7 +255,46 @@
       "source_regex": ["create_program_address\\s*\\(", "invoke_signed\\s*\\("],
       "why_it_matters": "User-controlled bumps or insufficient seed domains can validate alternate PDAs or share authority across users.",
       "look_for": ["caller supplied bump", "create_program_address instead of canonical find_program_address", "seeds missing user/domain separation"],
-      "fix": "Use canonical bumps and Anchor seeds/bump constraints with domain-separated seeds."
+      "fix": "Use canonical bumps and Anchor seeds/bump constraints with domain-separated seeds.",
+      "kill_signals": [
+        {
+          "id": "anchor_seeds_bump_constraint",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*\\bseeds\\s*=[^\\]]*\\bbump\\b",
+          "semantics": "Anchor seeds+bump constraint derives and asserts PDA canonical."
+        },
+        {
+          "id": "stored_canonical_bump",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:seeds\\s*=\\s*\\[[^\\]]*bump[^\\]]*\\]|\\.bump\\s*(?:,|\\)|\\]))",
+          "semantics": "Bump is read from on-chain state (canonical) rather than user-supplied."
+        },
+        {
+          "id": "find_program_address_only",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "Pubkey::find_program_address\\s*\\(",
+          "semantics": "Program uses find_program_address, which always returns the canonical bump."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Verify: (a) bump stored at init and reused via `#[account(seeds=..., bump = state.bump)]`, (b) seeds include per-user identifier.",
+        "q2_intended_behavior": "Shared PDAs may be intentional for global counters/registries; check docs.",
+        "q3_admin_only": "Usually no admin required; any user can collide PDAs.",
+        "q4_economic": "Depends on what the PDA authorizes; high when the PDA is a vault signer.",
+        "q5_ack_by_prior_audit": "Check prior notes.",
+        "q6_public_data": "N/A."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker identifies a PDA where user identity isn't part of the seeds (or where the bump is caller-supplied).",
+        "call_hint": "Attacker invokes `<instruction>` with crafted seeds/bump to derive a PDA that normally belongs to the victim.",
+        "result_hint": "Attacker controls the derived PDA and steals its lamports / token balance or subverts its authority role.",
+        "typical_cost": "Transaction fees only; no deploy needed.",
+        "typical_detect": "None at runtime.",
+        "typical_net_roi": "Equal to PDA's balance or authority exposure."
+      }
     },
     {
       "id": "uninitialized_account",
@@ -71,7 +306,46 @@
       "source_regex": ["initialize\\s*\\(", "try_borrow_mut_data\\s*\\("],
       "why_it_matters": "Manual initialization without an initialized flag or discriminator check can allow repeated initialization.",
       "look_for": ["initialize handlers writing raw data", "missing initialized/discriminator guard"],
-      "fix": "Use Anchor init constraints or write and enforce an initialized discriminator before mutation."
+      "fix": "Use Anchor init constraints or write and enforce an initialized discriminator before mutation.",
+      "kill_signals": [
+        {
+          "id": "anchor_init_constraint",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*\\binit\\b",
+          "semantics": "Anchor #[account(init, ...)] payer/space handles initialization atomically with rent-exempt creation."
+        },
+        {
+          "id": "explicit_initialized_flag",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:is_initialized|\\binitialized\\s*:=?|require!\\s*\\([^)]*initialized)",
+          "semantics": "Explicit initialized-flag check blocks re-initialization."
+        },
+        {
+          "id": "discriminator_zero_guard",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:data\\[0\\s*\\.\\.\\s*8\\]\\s*==\\s*\\[0|is_zeroed|&\\*data\\s*==\\s*\\[0u8)",
+          "semantics": "Code checks the 8-byte discriminator is unset before writing, preventing reinit."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Check for #[account(init, payer, space)] or an explicit `require!(!account.initialized)` guard.",
+        "q2_intended_behavior": "Some programs reuse accounts intentionally (e.g., ephemeral state) — but then they must zero data, not repopulate it.",
+        "q3_admin_only": "No admin required in typical cases.",
+        "q4_economic": "Depends on whether re-init wipes accounting; high when balances or authorities get reset.",
+        "q5_ack_by_prior_audit": "Check.",
+        "q6_public_data": "N/A."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Target account exists (closed, or partially initialized, or freshly airdropped rent).",
+        "call_hint": "Attacker invokes `initialize`/`create` again, overwriting the account struct with attacker-chosen fields.",
+        "result_hint": "Authority, mint, or bookkeeping fields flip to attacker values, letting them seize control or double-withdraw.",
+        "typical_cost": "One transaction fee.",
+        "typical_detect": "None at runtime.",
+        "typical_net_roi": "Potentially equal to entire program TVL."
+      }
     },
     {
       "id": "duplicate_mutable_accounts",
@@ -83,7 +357,39 @@
       "source_regex": ["user_a|user_b", "require_keys_neq!"],
       "why_it_matters": "Two writable accounts may alias the same address unless the program enforces distinctness.",
       "look_for": ["two mutable Account fields", "absence of key inequality checks"],
-      "fix": "Add require_keys_neq! or Anchor account constraints to enforce distinct writable accounts."
+      "fix": "Add require_keys_neq! or Anchor account constraints to enforce distinct writable accounts.",
+      "kill_signals": [
+        {
+          "id": "require_keys_neq_guard",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "require_keys_neq!\\s*\\(",
+          "semantics": "require_keys_neq! enforces distinct account keys for the mutable pair."
+        },
+        {
+          "id": "anchor_constraint_neq",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*constraint\\s*=[^\\]]*\\w+\\.key\\(\\)\\s*!=",
+          "semantics": "Anchor constraint expression enforces account inequality."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for require_keys_neq! between the two writable accounts, or an Anchor `constraint = a.key() != b.key()`.",
+        "q2_intended_behavior": "Aliasing intentional only in zero-sum utilities; otherwise a bug.",
+        "q3_admin_only": "No admin required.",
+        "q4_economic": "Only exploitable when the instruction does arithmetic that double-counts balance; often low impact.",
+        "q5_ack_by_prior_audit": "Check.",
+        "q6_public_data": "N/A."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker is the owner of a single token account and the instruction has two writable `token_account` slots.",
+        "call_hint": "Attacker passes the same account in both slots; instruction reads old balance twice, writes new balance twice.",
+        "result_hint": "Second write clobbers intermediate deduction, effectively duplicating the balance.",
+        "typical_cost": "One transaction fee.",
+        "typical_detect": "None at runtime.",
+        "typical_net_roi": "Equal to the duplicated-balance delta."
+      }
     },
     {
       "id": "sysvar_spoofing",
@@ -95,7 +401,39 @@
       "source_regex": ["rent\\s*:\\s*AccountInfo", "clock\\s*:\\s*AccountInfo"],
       "why_it_matters": "Sysvar accounts passed as raw AccountInfo can be spoofed unless the address or Sysvar type is enforced.",
       "look_for": ["Rent/Clock/Instructions sysvars typed as AccountInfo", "missing sysvar ID check"],
-      "fix": "Use Sysvar<'info, T> or require the account key to equal the canonical sysvar id."
+      "fix": "Use Sysvar<'info, T> or require the account key to equal the canonical sysvar id.",
+      "kill_signals": [
+        {
+          "id": "sysvar_wrapper_typed",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "\\w+\\s*:\\s*Sysvar\\s*<\\s*'info\\s*,",
+          "semantics": "Anchor Sysvar<'info, T> asserts canonical sysvar id automatically."
+        },
+        {
+          "id": "sysvar_id_pin",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "require_keys_eq!\\s*\\(\\s*ctx\\.accounts\\.\\w+\\.key\\(\\)\\s*,\\s*(?:sysvar::\\w+::ID|solana_program::sysvar::\\w+::ID|\\w+::ID)",
+          "semantics": "Explicit equality check against canonical sysvar id."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for Sysvar<'info, Clock/Rent/Instructions> typing or require_keys_eq!(.key(), sysvar::clock::ID) etc.",
+        "q2_intended_behavior": "Sysvar data reads should always be authenticated; spoofing is never intentional.",
+        "q3_admin_only": "No admin required.",
+        "q4_economic": "Depends on how the sysvar data drives logic (e.g., time-based unlocks).",
+        "q5_ack_by_prior_audit": "Check.",
+        "q6_public_data": "N/A (sysvars are public but integrity matters)."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "Attacker crafts an account mimicking the Clock/Rent sysvar layout with forged values (future timestamp, zero rent).",
+        "call_hint": "Attacker invokes `<instruction>` passing their fake sysvar; program reads attacker-chosen timestamp/rent values.",
+        "result_hint": "Time-locked actions unlock early, or rent-exemption checks are bypassed.",
+        "typical_cost": "Rent for the decoy account: ~0.002 SOL.",
+        "typical_detect": "None at runtime.",
+        "typical_net_roi": "Depends on the unlocked functionality; often medium."
+      }
     },
     {
       "id": "closing_account_error",
@@ -107,7 +445,39 @@
       "source_regex": ["lamports\\s*\\(", "close\\s*\\("],
       "why_it_matters": "Draining lamports without writing the closed-account discriminator can allow account revival.",
       "look_for": ["manual lamport transfer during close", "data not zeroed", "missing Anchor close constraint"],
-      "fix": "Use Anchor close constraints or zero data and write the closed-account discriminator after draining lamports."
+      "fix": "Use Anchor close constraints or zero data and write the closed-account discriminator after draining lamports.",
+      "kill_signals": [
+        {
+          "id": "anchor_close_constraint",
+          "kind": "regex",
+          "scope": "struct",
+          "pattern": "#\\[account\\([^\\]]*\\bclose\\s*=",
+          "semantics": "Anchor #[account(close = destination)] handles lamport drain + data zeroing + discriminator wipe atomically."
+        },
+        {
+          "id": "manual_data_zero",
+          "kind": "regex",
+          "scope": "function_body",
+          "pattern": "(?:data\\.borrow_mut\\(\\)\\.fill\\s*\\(\\s*0|CLOSED_ACCOUNT_DISCRIMINATOR|\\*\\s*data\\s*=\\s*\\[0u8)",
+          "semantics": "Manual zeroing of account data and/or writing the closed-account discriminator sentinel."
+        }
+      ],
+      "counter_question_hints": {
+        "q1_upstream_check": "Look for #[account(close = dest)] or explicit data.fill(0) / CLOSED_ACCOUNT_DISCRIMINATOR write after lamport drain.",
+        "q2_intended_behavior": "Never intentional — revival opportunity is always a bug.",
+        "q3_admin_only": "Depends — some closes are admin-only; but attacker can still revive post-close.",
+        "q4_economic": "High when the revived account controls funds or authority.",
+        "q5_ack_by_prior_audit": "Check.",
+        "q6_public_data": "N/A."
+      },
+      "attack_scenario_template": {
+        "setup_hint": "After a legitimate close, the account's lamport balance drops below rent-exemption but the data + discriminator remain intact.",
+        "call_hint": "Attacker sends enough lamports to the closed account to restore rent-exemption within the same block, then invokes a subsequent instruction that reads the (stale) data as authentic.",
+        "result_hint": "Program re-accepts the resurrected account; its old authority/balance fields now steer attacker-controlled logic.",
+        "typical_cost": "Rent top-up (~0.002 SOL) + one transaction fee.",
+        "typical_detect": "None — program has no revival check.",
+        "typical_net_roi": "Equal to the account's latent authority or balance; often High."
+      }
     }
   ]
 }
