@@ -53,7 +53,26 @@ function formatNormalizedInputs(task: AuditTask): string {
         return `  ${i + 1}. [rust_source] rootDir=${n.rootDir}${n.primaryFile ? ` primary=${n.primaryFile}` : ''} (origin: ${n.origin.type}=${n.origin.value})`;
       }
       if (n.kind === 'bytecode_only') {
-        return `  ${i + 1}. [bytecode_only] programId=${n.programId} bytecode=${n.bytecodePath} (origin: ${n.origin.type}=${n.origin.value}) — DEGRADED`;
+        const head = `  ${i + 1}. [bytecode_only] programId=${n.programId} bytecode=${n.bytecodePath} (origin: ${n.origin.type}=${n.origin.value}) — DEGRADED`;
+        if (!n.onchain) return head;
+        const auth: string[] = [];
+        auth.push(`kind=${n.onchain.kind}`);
+        if (n.onchain.mintAuthority !== undefined) {
+          auth.push(`mint_authority=${n.onchain.mintAuthority ?? 'null (revoked)'}`);
+        }
+        if (n.onchain.freezeAuthority !== undefined) {
+          auth.push(`freeze_authority=${n.onchain.freezeAuthority ?? 'null'}`);
+        }
+        if (n.onchain.upgradeAuthority !== undefined) {
+          auth.push(
+            `upgrade_authority=${n.onchain.upgradeAuthority ?? 'null (immutable)'}`,
+          );
+        }
+        if (n.onchain.token2022Extensions && n.onchain.token2022Extensions.length > 0) {
+          auth.push(`token2022_extensions=[${n.onchain.token2022Extensions.join(',')}]`);
+        }
+        if (n.onchain.parseNote) auth.push(`parse_note="${n.onchain.parseNote}"`);
+        return `${head}\n     onchain: ${auth.join(' · ')}`;
       }
       return `  ${i + 1}. [lead_only] leads=${n.leadsJsonPath} (origin: ${n.origin.type}=${n.origin.value}) — DEGRADED`;
     })
@@ -113,8 +132,10 @@ ${moreInfoBlock}`
 ### Step 6 · 报告
 6. \`solana_report\` — 按合并后的 findings 输出三段 Markdown + \`report.json\` + 每个 artefact 的 SHA-256
 
-### DEGRADED 路径
+### DEGRADED 路径 + 链上数据兜底
 对 \`normalizedInputs[].kind != rust_source\` 的条目：跳过 parse/scan/semgrep/L3/L4，直接走 \`solana_report\` 的 DEGRADED 模板；顶部写入 "DEGRADED — source unavailable"。当 LLM provider 不可用时，Step 5.L3/L4 自动降级为"只跑确定性 Gate1/Gate4 + judge_lite"，报告顶部标注 "DEGRADED — LLM unavailable"。
+
+> **链上数据使用约定（v0.8.1）**：当 \`bytecode_only\` 条目带 \`onchain\` 字段时，必须把它拼入报告的 **链上数据情况** 小节，按 SKILL.md §"Authority risk matrix" 着色（mint/freeze/upgrade authority = null → Low；EOA → High；Multisig/Squads → Medium）。Token-2022 红旗扩展（PermanentDelegate / TransferHook / TransferFee / ConfidentialTransfer / NonTransferable）逐条单独标注。即便走 DEGRADED 模板，链上数据小节也必须输出。
 
 > Legacy：\`solana_ai_analyze\` 仍保留在 skill 清单但已 \`deprecated: true\`，仅用于重跑旧 benchmark，**新运行不得使用**。
 

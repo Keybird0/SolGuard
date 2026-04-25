@@ -77,6 +77,15 @@ export type NormalizedInput =
       kind: 'bytecode_only';
       programId: string;
       bytecodePath: string;
+      /**
+       * On-chain authority snapshot pulled at normalize time. `undefined`
+       * means we couldn't classify the account (unknown owner / fetch
+       * timeout); `null` on a slot means the field exists but the
+       * authority is revoked / immutable. Mirrors SKILL.md §"Authority
+       * risk matrix" so the report can flag rugpull / honeypot signals
+       * (mint freeze authority set, upgrade authority is an EOA, etc.).
+       */
+      onchain?: OnchainAuthority;
       origin: AuditInput;
     }
   | {
@@ -84,6 +93,33 @@ export type NormalizedInput =
       leadsJsonPath: string;
       origin: AuditInput;
     };
+
+/**
+ * Snapshot of the on-chain authority slots that affect security posture.
+ * Field semantics match SPL Token / Token-2022 / BPFLoaderUpgradeable
+ * conventions: a field is `null` when the authority slot exists but is
+ * revoked (mint frozen, program finalised); `undefined` when the slot
+ * doesn't apply to this account class (e.g. `freezeAuthority` on a plain
+ * upgradeable program).
+ */
+export interface OnchainAuthority {
+  owner: string;
+  executable: boolean;
+  /** What kind of account this is, from the owner program ID. */
+  kind:
+    | 'mint'
+    | 'mint-2022'
+    | 'program-upgradeable'
+    | 'program-finalised'
+    | 'unknown';
+  mintAuthority?: string | null;
+  freezeAuthority?: string | null;
+  upgradeAuthority?: string | null;
+  /** Names of detected Token-2022 extensions (subset only meaningful when kind=mint-2022). */
+  token2022Extensions?: string[];
+  /** Free-form note set when parsing partially failed but we got some signal. */
+  parseNote?: string;
+}
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 
