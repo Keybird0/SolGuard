@@ -122,7 +122,7 @@
   //   15s  completed (100%)
   // ============================================================
   const DEMO_CASES = ['case-01', 'case-02', 'case-03'];
-  const DEMO_AMOUNT = 0.01;
+  const DEMO_AMOUNT = 0.001;
   const DEMO_RECIPIENT = 'DYmzG1oSfzJoVTSXedpn1mz3MqeH7H6ykV5RBsZJuD8i';
 
   /** @type {Map<string, any>} */
@@ -355,14 +355,32 @@
       const reference = makeReference();
       const email = parsed.email || 'demo@solguard.xyz';
 
-      // Map the submitted targets (up to 3) to our 3 case studies; if the
-      // user submitted fewer, we still show all 3 (pre-canned demo). Each
-      // case gets a synthetic `inputs` list that echoes the demo target name.
-      const demoInputs = {
+      // Map the submitted targets (up to 3) onto our 3 case studies so the
+      // progress + report UI echo back the exact fields the user submitted.
+      // When the user submitted fewer / more than 3 we fall back to the
+      // pre-canned demo labels to keep the batch visually complete.
+      const demoInputsFallback = {
         'case-01': [{ type: 'github', value: 'coral-xyz/sealevel-attacks (arbitrary-cpi)' }],
         'case-02': [{ type: 'github', value: 'SolGuard/fixtures/clean-escrow' }],
         'case-03': [{ type: 'github', value: 'SolGuard/fixtures/staking-slice' }],
       };
+      function targetToInputs(t) {
+        if (!t || typeof t !== 'object') return null;
+        const list = [];
+        if (t.github) list.push({ type: 'github', value: t.github });
+        if (t.contractAddress)
+          list.push({ type: 'contract_address', value: t.contractAddress });
+        if (t.whitepaper) list.push({ type: 'whitepaper', value: t.whitepaper });
+        if (t.website) list.push({ type: 'website', value: t.website });
+        if (t.moreInfo) list.push({ type: 'more_info', value: t.moreInfo });
+        return list.length ? list : null;
+      }
+      const submittedTargets = Array.isArray(parsed.targets) ? parsed.targets : [];
+      const demoInputs = {};
+      DEMO_CASES.forEach((caseId, i) => {
+        const echoed = targetToInputs(submittedTargets[i]);
+        demoInputs[caseId] = echoed || demoInputsFallback[caseId];
+      });
 
       const batch = {
         batchId,
@@ -507,4 +525,119 @@
       );
     }
   };
+
+  // ============================================================
+  // Submit-page prefill — lets visitors click "Start Audit → Submit"
+  // and immediately press Submit without typing anything. We pre-populate
+  // three Audit Targets (one per case study) plus a demo email. The
+  // real form validation still runs against these values, so everything
+  // downstream (readTargets → POST /api/audit → shim echoes back) stays
+  // consistent with what the user sees on screen.
+  // ============================================================
+  const DEMO_PREFILL_TARGETS = [
+    {
+      github: 'https://github.com/coral-xyz/sealevel-attacks',
+      moreInfo:
+        'Case 01 · Arbitrary CPI lesson. Expected: 1 Critical + 2 High (R4, R1).',
+    },
+    {
+      github: 'https://github.com/SolGuard/fixtures/clean-escrow',
+      moreInfo:
+        'Case 02 · Clean escrow slice. Expected: 0 findings, grade B-Low.',
+    },
+    {
+      github: 'https://github.com/SolGuard/fixtures/staking-slice',
+      moreInfo:
+        'Case 03 · Staking rewards slice. Expected: 1 Medium integer overflow (R3).',
+    },
+  ];
+  const DEMO_PREFILL_EMAIL = 'demo@solguard.xyz';
+
+  function prefillSubmitPage() {
+    const section = document.getElementById('section-submit');
+    if (!section || section.classList.contains('hidden')) return;
+    const list = document.getElementById('targets-list');
+    if (!list) return;
+    // Need at least one target card rendered by app.js first.
+    const firstGithub = list.querySelector(
+      'input[data-field="github"].tf-input',
+    );
+    if (!firstGithub) return;
+    // Idempotent: once the first field is filled, never overwrite user
+    // edits. Re-runs on re-entry cleanly because app.js resets the list
+    // back to a single empty card on every setupSubmitSection call.
+    if (firstGithub.value) return;
+
+    // Synchronously click "Add another Audit Target" until we have 3.
+    // MutationObserver callbacks are batched microtasks, so this loop
+    // runs without re-entering prefillSubmitPage mid-flight.
+    const addBtn = document.getElementById('btn-add-target');
+    let guard = 0;
+    while (
+      addBtn &&
+      list.querySelectorAll('.target-card').length < DEMO_PREFILL_TARGETS.length &&
+      guard++ < 10
+    ) {
+      addBtn.click();
+    }
+
+    const cards = list.querySelectorAll('.target-card');
+    DEMO_PREFILL_TARGETS.forEach((t, i) => {
+      const card = cards[i];
+      if (!card) return;
+      Object.entries(t).forEach(([field, value]) => {
+        const el = card.querySelector(
+          '.tf-input[data-field="' + field + '"]',
+        );
+        if (!el) return;
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+
+    const email = document.getElementById('input-email');
+    if (email && !email.value) {
+      email.value = DEMO_PREFILL_EMAIL;
+      email.dispatchEvent(new Event('input', { bubbles: true }));
+      email.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const consent = document.getElementById('input-consent');
+    if (consent && !consent.checked) consent.checked = true;
+
+    console.info(
+      '[SolGuard demo] Submit form pre-filled with',
+      DEMO_PREFILL_TARGETS.length,
+      'targets',
+    );
+  }
+
+  function installPrefillWatcher() {
+    const section = document.getElementById('section-submit');
+    if (!section) return;
+    // Class change on #section-submit = Router.go navigated into submit.
+    new MutationObserver(prefillSubmitPage).observe(section, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    // childList change on #targets-list = setupSubmitSection re-rendered
+    // the list. We rely on this to catch the fresh empty card and to
+    // trigger the prefill after our own addBtn clicks above are processed.
+    const list = document.getElementById('targets-list');
+    if (list) {
+      new MutationObserver(prefillSubmitPage).observe(list, {
+        childList: true,
+      });
+    }
+    // Kick once in case the page loaded directly at #submit.
+    prefillSubmitPage();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installPrefillWatcher, {
+      once: true,
+    });
+  } else {
+    installPrefillWatcher();
+  }
 })();
