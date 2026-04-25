@@ -1,5 +1,10 @@
 # Ground truth for seed test fixtures.
-# Consumed by scripts/run_benchmark.py (Phase 6).
+# Consumed by:
+#   - Phase 2 scan/AI/E2E tests (`expected_scan_rule_ids`,
+#     `expected_ai_confirmed_*`, `expected_severity_gte`,
+#     `expected_report_files`)
+#   - Phase 6 accuracy benchmark (`expected[]` — legacy schema, retained for
+#     backward compatibility).
 
 fixtures:
   - file: 01_missing_signer.rs
@@ -7,12 +12,30 @@ fixtures:
       - rule_id: missing_signer_check
         severity: High
         approx_line: 25
+    expected_scan_rule_ids: [missing_signer_check]
+    expected_ai_confirmed_min: 1
+    expected_ai_confirmed_max: null
+    expected_severity_gte: High
+    expected_report_files:
+      - risk_summary.md
+      - assessment.md
+      - checklist.md
+      - report.json
 
   - file: 02_missing_owner.rs
     expected:
       - rule_id: missing_owner_check
         severity: High
         approx_line: 30
+    expected_scan_rule_ids: [missing_owner_check]
+    expected_ai_confirmed_min: 1
+    expected_ai_confirmed_max: null
+    expected_severity_gte: High
+    expected_report_files:
+      - risk_summary.md
+      - assessment.md
+      - checklist.md
+      - report.json
 
   - file: 03_integer_overflow.rs
     expected:
@@ -22,12 +45,39 @@ fixtures:
       - rule_id: integer_overflow
         severity: Medium
         approx_line: 28
+    expected_scan_rule_ids: [integer_overflow]
+    expected_ai_confirmed_min: 1
+    expected_ai_confirmed_max: null
+    expected_severity_gte: Medium
+    expected_report_files:
+      - risk_summary.md
+      - assessment.md
+      - checklist.md
+      - report.json
 
   - file: 04_arbitrary_cpi.rs
     expected:
       - rule_id: arbitrary_cpi
         severity: Critical
         approx_line: 31
+    expected_scan_rule_ids: [arbitrary_cpi]
+    expected_ai_confirmed_min: 1
+    expected_ai_confirmed_max: null
+    expected_severity_gte: Critical
+    expected_report_files:
+      - risk_summary.md
+      - assessment.md
+      - checklist.md
+      - report.json
 
   - file: 05_clean_contract.rs
     expected: []
+    expected_scan_rule_ids: []
+    expected_ai_confirmed_min: 0
+    expected_ai_confirmed_max: 0
+    expected_severity_gte: null
+    expected_report_files:
+      - risk_summary.md
+      - assessment.md
+      - checklist.md
+      - report.json

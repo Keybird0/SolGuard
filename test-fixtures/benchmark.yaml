@@ -1,0 +1,261 @@
+# SolGuard Phase 6 benchmark corpus.
+#
+# Consumed by:
+#   - skill/solana-security-audit-skill/scripts/run_benchmark.py
+#     (authoritative precision/recall/F1 + avg duration driver)
+#   - skill/solana-security-audit-skill/scripts/validate_benchmarks.py
+#     (schema validation; runs in CI)
+#
+# Layout contract (keep stable, compare_benchmarks.py depends on it):
+#
+#   fixtures:
+#     - name: <stable slug, used as taskId>
+#       path: <relative to test-fixtures/>
+#       scale: small | medium | large    # gating for per-scale timing
+#       has_vuln: bool                   # Phase 6 FP/FN tagging
+#       source:
+#         repo: <upstream>
+#         commit: <sha | n/a>
+#         license: <SPDX id or "derived">
+#       ground_truth:
+#         - rule_id: <one of the 7 canonical rule ids or semgrep:<slug>>
+#           severity: Critical | High | Medium | Low | Info
+#           approx_line: <int>           # tolerance ±5 lines on match
+#
+# Aggregate counts (asserted in validate_benchmarks.py):
+#   total: 17   (5 seed + 12 real-world)
+#   has_vuln=true: 13      (>= 5 required)
+#   has_vuln=false: 4      (>= 3 required)
+
+version: "1"
+
+counts:
+  total: 17
+  has_vuln_true: 13
+  has_vuln_false: 4
+
+fixtures:
+  # ---- Seed corpus (Phase 1, retained) --------------------------------
+  - name: seed-01-missing-signer
+    path: contracts/01_missing_signer.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: SolGuard/test-fixtures
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: missing_signer_check
+        severity: High
+        approx_line: 32
+
+  - name: seed-02-missing-owner
+    path: contracts/02_missing_owner.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: SolGuard/test-fixtures
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: missing_owner_check
+        severity: High
+        approx_line: 34
+
+  - name: seed-03-integer-overflow
+    path: contracts/03_integer_overflow.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: SolGuard/test-fixtures
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 23
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 30
+
+  - name: seed-04-arbitrary-cpi
+    path: contracts/04_arbitrary_cpi.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: SolGuard/test-fixtures
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: arbitrary_cpi
+        severity: Critical
+        approx_line: 25
+
+  - name: seed-05-clean
+    path: contracts/05_clean_contract.rs
+    scale: small
+    has_vuln: false
+    source:
+      repo: SolGuard/test-fixtures
+      commit: n/a
+      license: MIT
+    ground_truth: []
+
+  # ---- Real-world small (Sealevel-inspired) ---------------------------
+  - name: rw01-signer-auth
+    path: real-world/small/rw01_signer_auth.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: missing_signer_check
+        severity: High
+        approx_line: 32
+
+  - name: rw02-account-data-matching
+    path: real-world/small/rw02_account_data_matching.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: account_data_matching
+        severity: High
+        approx_line: 25
+
+  - name: rw03-owner-check
+    path: real-world/small/rw03_owner_check.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: missing_owner_check
+        severity: High
+        approx_line: 24
+
+  - name: rw04-arbitrary-cpi
+    path: real-world/small/rw04_arbitrary_cpi.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: arbitrary_cpi
+        severity: Critical
+        approx_line: 33
+
+  - name: rw05-bump-seed-canon
+    path: real-world/small/rw05_bump_seed_canon.rs
+    scale: small
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: pda_derivation_error
+        severity: High
+        approx_line: 26
+
+  # ---- Real-world medium ---------------------------------------------
+  - name: rw06-closing-accounts
+    path: real-world/medium/rw06_closing_accounts.rs
+    scale: medium
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: uninitialized_account
+        severity: High
+        approx_line: 50
+
+  - name: rw07-pda-sharing
+    path: real-world/medium/rw07_pda_sharing.rs
+    scale: medium
+    has_vuln: true
+    source:
+      repo: coral-xyz/sealevel-attacks
+      commit: 24555d044802db4022112a94d6d70e74291a4b6d
+      license: derived-no-explicit-license
+    ground_truth:
+      - rule_id: pda_derivation_error
+        severity: High
+        approx_line: 38
+
+  - name: rw08-clean-escrow
+    path: real-world/medium/rw08_clean_escrow.rs
+    scale: medium
+    has_vuln: false
+    source:
+      repo: anchor-book
+      commit: n/a
+      license: derived
+    ground_truth: []
+
+  - name: rw09-clean-counter
+    path: real-world/medium/rw09_clean_counter.rs
+    scale: medium
+    has_vuln: false
+    source:
+      repo: coral-xyz/anchor
+      commit: n/a
+      license: derived-Apache-2.0
+    ground_truth: []
+
+  - name: rw10-clean-vesting
+    path: real-world/medium/rw10_clean_vesting.rs
+    scale: medium
+    has_vuln: false
+    source:
+      repo: synthetic
+      commit: n/a
+      license: MIT
+    ground_truth: []
+
+  # ---- Real-world large (multi-instruction slices) -------------------
+  - name: rw11-amm-slice
+    path: real-world/large/rw11_amm_slice.rs
+    scale: large
+    has_vuln: true
+    source:
+      repo: synthetic
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 97
+      - rule_id: missing_signer_check
+        severity: High
+        approx_line: 252
+      - rule_id: arbitrary_cpi
+        severity: Critical
+        approx_line: 181
+
+  - name: rw12-staking-slice
+    path: real-world/large/rw12_staking_slice.rs
+    scale: large
+    has_vuln: true
+    source:
+      repo: synthetic
+      commit: n/a
+      license: MIT
+    ground_truth:
+      - rule_id: missing_owner_check
+        severity: High
+        approx_line: 251
+      - rule_id: integer_overflow
+        severity: Medium
+        approx_line: 148
