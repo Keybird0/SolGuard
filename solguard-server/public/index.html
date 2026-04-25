@@ -2,76 +2,629 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SolGuard · Free AI Security Audit for Solana</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>SolGuard · AI Security Audit for Solana</title>
     <meta
       name="description"
-      content="Free, open-source AI security audit for Solana smart contracts. Scan any GitHub URL or program address in under 5 minutes."
+      content="AI-powered security audit for Solana smart contracts. Submit any GitHub repo or program address and get a full report in minutes."
     />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E🛡️%3C/text%3E%3C/svg%3E" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-      :root {
-        color-scheme: dark;
-      }
-      body {
-        font-family: 'Inter', system-ui, -apple-system, sans-serif;
-      }
-    </style>
+    <meta name="theme-color" content="#0a0a0b" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E🛡️%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="preconnect" href="https://api.devnet.solana.com" />
+    <link rel="stylesheet" href="/styles.css" />
+    <!-- Demo Mode shim — auto-activates on *.vercel.app / ?demo=1.
+         Must load BEFORE app.js so the fetch + wallet mocks are in place. -->
+    <script src="/demo-shim.js"></script>
+    <!-- Solana web3 (IIFE exposes window.solanaWeb3) -->
+    <script
+      src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"
+      defer
+    ></script>
   </head>
-  <body class="min-h-screen bg-neutral-950 text-neutral-100">
-    <main class="mx-auto max-w-4xl px-6 py-16">
-      <div class="text-center">
-        <div class="mb-6 inline-flex items-center gap-2 rounded-full bg-brand-purple/10 px-4 py-1 text-sm">
-          <span class="text-emerald-400">●</span>
-          <span class="text-neutral-300">Under construction · Phase 1 scaffold</span>
-        </div>
-        <h1 class="text-5xl font-bold tracking-tight sm:text-6xl">
-          <span style="background: linear-gradient(90deg, #7c3aed, #14f195); -webkit-background-clip: text; color: transparent;">SolGuard</span>
-        </h1>
-        <p class="mt-4 text-xl text-neutral-400">
-          AI-powered security audit for Solana smart contracts.
-        </p>
-        <p class="mt-2 text-lg text-neutral-500">
-          Free · Open-source · Instant
-        </p>
-
-        <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+  <body>
+    <header class="site-header">
+      <div class="inner">
+        <a
+          class="logo"
+          href="#landing"
+          role="button"
+          aria-label="SolGuard home"
+        >
+          <span class="shield" aria-hidden="true">🛡️</span>
+          <span class="sol">SolGuard</span>
+        </a>
+        <span class="tag">AI Audit</span>
+        <nav>
+          <a class="nav-link" href="#landing">Home</a>
+          <a class="nav-link" href="#submit">Audit</a>
           <a
+            class="nav-link"
             href="https://github.com/Keybird0/SolGuard"
-            class="rounded-lg border border-neutral-700 bg-neutral-900 px-6 py-3 font-medium hover:bg-neutral-800"
-            >View on GitHub</a
+            target="_blank"
+            rel="noopener"
+            >GitHub</a
           >
-          <a
-            href="/healthz"
-            class="rounded-lg bg-gradient-to-r from-purple-600 to-emerald-500 px-6 py-3 font-semibold text-white hover:opacity-90"
-            >Server Health</a
-          >
-        </div>
-
-        <div class="mt-16 grid grid-cols-1 gap-6 text-left sm:grid-cols-3">
-          <div class="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-            <div class="text-2xl">⚡</div>
-            <h3 class="mt-3 font-semibold">&lt; 5 min</h3>
-            <p class="mt-1 text-sm text-neutral-400">per audit (vs 2–4 weeks pro)</p>
-          </div>
-          <div class="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-            <div class="text-2xl">💸</div>
-            <h3 class="mt-3 font-semibold">0.01 SOL</h3>
-            <p class="mt-1 text-sm text-neutral-400">per audit (vs $50,000 pro)</p>
-          </div>
-          <div class="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-            <div class="text-2xl">🤖</div>
-            <h3 class="mt-3 font-semibold">AI + 7 rules</h3>
-            <p class="mt-1 text-sm text-neutral-400">Solana-specific detection</p>
-          </div>
-        </div>
-
-        <footer class="mt-20 text-sm text-neutral-500">
-          <p>Made with 🛡️ for the Solana ecosystem</p>
-          <p class="mt-1">Follow progress on <a href="https://github.com/Keybird0/SolGuard" class="text-emerald-400 hover:underline">GitHub</a></p>
-        </footer>
+          <span class="cluster-chip devnet" id="cluster-chip">Devnet</span>
+        </nav>
       </div>
+    </header>
+
+    <main>
+      <!-- ============ LANDING ============ -->
+      <section id="section-landing">
+        <div class="hero">
+          <span class="eyebrow">
+            <span style="color: var(--brand-sol)">●</span>
+            Open-source · Solana-native · Devnet ready
+          </span>
+          <h1>
+            AI-Powered <em>Security Audit</em><br />
+            for Solana Smart Contracts
+          </h1>
+          <p class="lede">
+            Paste a GitHub repo, program address, or whitepaper URL — SolGuard's
+            AI agent parses, scans, cross-validates with 7+ Solana-native rules
+            and delivers a professional three-tier report in minutes.
+          </p>
+          <div class="cta-row">
+            <button class="btn btn-primary" onclick="Router.go('submit')">
+              Start Audit →
+            </button>
+            <a
+              class="btn btn-outline"
+              href="https://github.com/Keybird0/SolGuard"
+              target="_blank"
+              rel="noopener"
+              >View on GitHub</a
+            >
+          </div>
+          <div class="stats">
+            <span>⏱ <b>&lt; 5 min</b> · typical audit</span>
+            <span>🧠 <b>AI + 7 rules</b> · cross-validated</span>
+            <span>💸 <b>0.01 SOL</b> · Devnet fee</span>
+          </div>
+        </div>
+
+        <div class="features">
+          <div class="feat">
+            <div class="icon">⚡</div>
+            <h3>Fast &amp; Thorough</h3>
+            <p>
+              Anchor/Rust AST parse → rule scan → Semgrep → AI cross-validation
+              → tiered Markdown report. Five stages, one pipeline.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">🧠</div>
+            <h3>AI + Static Rules</h3>
+            <p>
+              Seven Solana-specific rules (unchecked account, arithmetic,
+              signer, PDA, deserialize, CPI, authority) plus LLM exploration to
+              catch blind spots.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">📄</div>
+            <h3>Three-Tier Report</h3>
+            <p>
+              Risk Summary for stakeholders, Full Assessment for engineers,
+              Checklist for CI — all Markdown, reproducible, shareable.
+            </p>
+          </div>
+        </div>
+
+        <div class="how">
+          <h3>How It Works</h3>
+          <div class="steps">
+            <div class="step">
+              <div class="num">01</div>
+              <div class="title">📝 Submit</div>
+              <div class="desc">Repo URL, program address, or URL</div>
+            </div>
+            <div class="step">
+              <div class="num">02</div>
+              <div class="title">💳 Pay with Phantom</div>
+              <div class="desc">0.01 SOL on Devnet · Solana Pay</div>
+            </div>
+            <div class="step">
+              <div class="num">03</div>
+              <div class="title">🤖 AI Audits</div>
+              <div class="desc">Parse → scan → AI → report</div>
+            </div>
+            <div class="step">
+              <div class="num">04</div>
+              <div class="title">📧 Receive</div>
+              <div class="desc">Web view + email + Markdown download</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row center">
+          <button class="btn btn-accent" onclick="Router.go('submit')">
+            Audit Your Program Now →
+          </button>
+        </div>
+      </section>
+
+      <!-- ============ SUBMIT ============ -->
+      <section id="section-submit" class="hidden">
+        <div class="card">
+          <h2>🔐 Submit Audit Request</h2>
+          <p class="sub">
+            Add up to 5 Audit Targets. Each Target becomes an independent audit
+            task with its own report. A single Solana Pay transfer covers the
+            entire batch.
+          </p>
+
+          <form id="submit-form" novalidate>
+            <div class="field">
+              <label>
+                Audit Targets<span class="req">*</span>
+                <span class="muted small" style="font-weight: 400">
+                  (1–5 Targets · at least one field per Target)</span
+                >
+              </label>
+              <div class="targets-list" id="targets-list"></div>
+              <button type="button" class="add-row" id="btn-add-target">
+                + Add another Audit Target
+              </button>
+              <div class="hint">
+                For each Target, fill any combination of:
+                GitHub repo · Program address (base58) · Whitepaper URL ·
+                Project website · More Info (free text, ≤ 2000 chars).
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="input-email"
+                >Email<span class="req">*</span></label
+              >
+              <input
+                id="input-email"
+                class="input"
+                type="email"
+                placeholder="you@example.com"
+                autocomplete="email"
+                inputmode="email"
+                spellcheck="false"
+                autocapitalize="off"
+                required
+                aria-describedby="hint-email"
+              />
+              <div class="hint" id="hint-email">
+                We'll send all reports in this batch here when the audits complete.
+                We never share your email.
+              </div>
+              <div class="error" id="err-email" hidden></div>
+            </div>
+
+            <label class="consent">
+              <input type="checkbox" id="input-consent" checked />
+              <span
+                >I understand this is a best-effort AI-assisted audit,
+                not a replacement for professional review.</span
+              >
+            </label>
+
+            <div class="price-summary" id="price-summary">
+              <div class="ps-left">
+                <div class="ps-label">Total</div>
+                <div class="ps-breakdown" id="ps-breakdown">
+                  <span id="ps-count">1</span> Target × <span id="ps-unit">0.01</span> SOL
+                </div>
+              </div>
+              <div class="ps-amount">
+                <span id="ps-total">0.01</span>
+                <span class="ps-unit-label">SOL</span>
+              </div>
+            </div>
+
+            <div class="row between mt-24">
+              <button
+                type="button"
+                class="btn btn-ghost"
+                onclick="Router.go('landing')"
+              >
+                ← Back
+              </button>
+              <button
+                type="submit"
+                class="btn btn-primary"
+                id="btn-submit"
+              >
+                Submit &amp; Continue →
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- ============ PROGRESS ============ -->
+      <section id="section-progress" class="hidden">
+        <div class="card">
+          <div class="progress-hero">
+            <h2 id="prog-title">Preparing your audit…</h2>
+            <p id="prog-subtitle">
+              Connect your wallet to pay 0.01 SOL on Devnet and start the
+              pipeline.
+            </p>
+          </div>
+
+          <!-- Payment pane (shown when batch.status=paying) -->
+          <div id="pay-pane">
+            <div class="kv">
+              <div class="kv-row">
+                <span class="k">Batch ID</span>
+                <span class="v mono-lg" id="pay-taskid">—</span>
+              </div>
+              <div class="kv-row">
+                <span class="k">Targets</span>
+                <span class="v"><span id="pay-target-count">1</span></span>
+              </div>
+              <div class="kv-row">
+                <span class="k">Network</span>
+                <span class="v"
+                  ><span id="pay-cluster">devnet</span></span
+                >
+              </div>
+              <div class="kv-row">
+                <span class="k">Audit fee</span>
+                <span class="v" style="color: var(--brand-sol)"
+                  ><span id="pay-amount">0.01</span> SOL
+                  <span class="small muted" id="pay-amount-breakdown"></span>
+                </span>
+              </div>
+              <div class="kv-row">
+                <span class="k">Recipient</span>
+                <span class="v" id="pay-recipient">—</span>
+              </div>
+              <div class="kv-row">
+                <span class="k">Reference</span>
+                <span class="v">
+                  <span id="pay-reference">—</span>
+                  <button
+                    type="button"
+                    class="copy-chip"
+                    id="btn-copy-reference"
+                    data-tip="Copy reference to clipboard"
+                    aria-label="Copy reference to clipboard"
+                  >
+                    ⧉ Copy
+                  </button>
+                </span>
+              </div>
+            </div>
+
+            <div id="wallet-disconnected" class="mt-16">
+              <button class="btn btn-accent" id="btn-connect" style="width: 100%">
+                👻 Connect Phantom Wallet
+              </button>
+              <div class="hint" style="text-align: center; margin-top: 8px">
+                Phantom extension required ·
+                <a
+                  href="https://phantom.app"
+                  target="_blank"
+                  rel="noopener"
+                  >Install</a
+                >
+              </div>
+            </div>
+
+            <div id="wallet-connected" class="mt-16" hidden>
+              <div class="kv">
+                <div class="kv-row">
+                  <span class="k">Your wallet</span>
+                  <span
+                    class="v"
+                    id="wallet-addr"
+                    style="color: var(--brand-purple-2)"
+                    >—</span
+                  >
+                </div>
+                <div class="kv-row">
+                  <span class="k">Balance</span>
+                  <span class="v" id="wallet-balance">—</span>
+                </div>
+              </div>
+              <button
+                class="btn btn-primary mt-16"
+                id="btn-pay"
+                style="width: 100%"
+              >
+                💳 Pay <span id="pay-btn-amount">0.01</span> SOL &amp;
+                Start Audit
+              </button>
+              <div class="hint" style="text-align: center; margin-top: 8px">
+                <a href="#" id="btn-manual-sig">
+                  Prefer manual signature?
+                </a>
+              </div>
+            </div>
+
+            <div id="manual-sig-pane" class="mt-16" hidden>
+              <label class="small muted" for="input-manual-sig"
+                >Paste the transaction signature you broadcast</label
+              >
+              <input
+                class="input mt-8"
+                id="input-manual-sig"
+                placeholder="5Vj… (base58, 87–88 chars)"
+                autocomplete="off"
+                spellcheck="false"
+                autocapitalize="off"
+                aria-describedby="manual-sig-hint"
+              />
+              <div class="hint small muted" id="manual-sig-hint">
+                Tip: grab the signature from your wallet's activity tab or from
+                Solana Explorer. Press <kbd>Enter</kbd> to submit.
+              </div>
+              <button class="btn btn-outline mt-8" id="btn-push-manual">
+                Submit signature
+              </button>
+            </div>
+
+            <div id="tx-pending" class="mt-16" hidden>
+              <div class="row">
+                <span class="spinner"></span>
+                <span
+                  >Waiting for Solana confirmation…
+                  <span class="mono small" id="tx-sig">—</span></span
+                >
+              </div>
+            </div>
+          </div>
+
+          <!-- Audit pane (shown once batch is paid; renders N per-target cards) -->
+          <div id="audit-pane" hidden>
+            <div class="row between">
+              <span class="status-badge" id="audit-status">Queued</span>
+              <span class="small muted"
+                >Overall: <span id="audit-overall-pct">0%</span> ·
+                <span id="audit-completed-count">0</span>/<span
+                  id="audit-total-count"
+                  >1</span
+                > done · Elapsed <span id="audit-elapsed">0s</span></span
+              >
+            </div>
+            <div class="progress-bar">
+              <div class="fill" id="audit-overall-fill"></div>
+            </div>
+            <p class="small muted" id="audit-overall-text">
+              Dispatching to OpenHarness agent…
+            </p>
+
+            <div class="task-list" id="task-list"></div>
+          </div>
+
+          <!-- Failed pane -->
+          <div id="fail-pane" hidden>
+            <div
+              class="row"
+              style="
+                padding: 16px;
+                border: 1px solid rgba(239, 68, 68, 0.3);
+                background: rgba(239, 68, 68, 0.08);
+                border-radius: var(--radius);
+              "
+            >
+              <span style="font-size: 1.5rem">❌</span>
+              <div>
+                <div style="font-weight: 700">Audit failed</div>
+                <div class="small muted" id="fail-reason">
+                  An unexpected error occurred.
+                </div>
+              </div>
+            </div>
+            <div class="row mt-16">
+              <button
+                class="btn btn-outline"
+                onclick="Router.go('submit')"
+              >
+                ← Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ REPORT ============ -->
+      <section id="section-report" class="hidden">
+        <div class="target-tabs" id="target-tabs" role="tablist" hidden></div>
+        <div class="report-head card" style="margin-bottom: 16px">
+          <div>
+            <div class="title" id="rep-title">Loading report…</div>
+            <div class="meta">
+              Task
+              <span class="mono" id="rep-taskid">—</span> ·
+              Completed
+              <span id="rep-completed">—</span>
+            </div>
+            <div class="findings-grid" style="margin-top: 16px">
+              <div class="finding-cell sev-c">
+                <div class="num" id="count-critical">0</div>
+                <div class="sev">Critical</div>
+              </div>
+              <div class="finding-cell sev-h">
+                <div class="num" id="count-high">0</div>
+                <div class="sev">High</div>
+              </div>
+              <div class="finding-cell sev-m">
+                <div class="num" id="count-medium">0</div>
+                <div class="sev">Medium</div>
+              </div>
+              <div class="finding-cell sev-l">
+                <div class="num" id="count-low">0</div>
+                <div class="sev">Low</div>
+              </div>
+              <div class="finding-cell sev-i">
+                <div class="num" id="count-info">0</div>
+                <div class="sev">Info</div>
+              </div>
+            </div>
+          </div>
+          <div class="rating rating-U" id="rep-rating">?</div>
+        </div>
+
+        <div class="report-tabs" role="tablist">
+          <button class="tab active" data-tab="summary">Risk Summary</button>
+          <button class="tab" data-tab="assessment">
+            Full Assessment
+          </button>
+          <button class="tab" data-tab="checklist">Checklist</button>
+        </div>
+
+        <div class="row between mt-8" style="margin-bottom: 16px">
+          <div class="row">
+            <button
+              class="btn btn-sm btn-outline"
+              id="btn-dl-md"
+              data-tip="Download the full Markdown report"
+            >
+              ⬇ Download .md
+            </button>
+            <button
+              class="btn btn-sm btn-outline"
+              id="btn-dl-json"
+              data-tip="Structured JSON — ideal for CI / scripting"
+            >
+              ⬇ Download .json
+            </button>
+            <button
+              class="btn btn-sm btn-ghost"
+              id="btn-print"
+              data-tip="Use your browser's Save as PDF to archive"
+            >
+              🖨 Print
+            </button>
+          </div>
+          <button
+            class="btn btn-sm btn-accent"
+            onclick="Router.go('feedback', { batchId: State.batchId, taskId: State.taskId })"
+          >
+            Leave Feedback →
+          </button>
+        </div>
+
+        <div class="report-layout">
+          <aside class="report-sidebar">
+            <h3>Findings</h3>
+            <ul class="findings-side" id="findings-side">
+              <li class="muted small">
+                No findings yet — clean run so far.
+              </li>
+            </ul>
+          </aside>
+          <article class="report-main md-body" id="rep-body">
+            Loading…
+          </article>
+        </div>
+      </section>
+
+      <!-- ============ FEEDBACK ============ -->
+      <section id="section-feedback" class="hidden">
+        <div class="card">
+          <h2>💬 Share Your Feedback</h2>
+          <p class="sub">
+            Help us make SolGuard better. One question, and a few words
+            optional.
+          </p>
+
+          <form id="feedback-form">
+            <div class="field">
+              <label>How would you rate this audit?<span class="req">*</span></label>
+              <div class="stars" id="fb-stars" role="radiogroup"></div>
+              <input type="hidden" id="fb-rating" value="0" />
+              <div class="error" id="err-rating" hidden>
+                Please pick a rating.
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="fb-content">What could be improved?</label>
+              <textarea
+                class="input"
+                id="fb-content"
+                placeholder="Anything you'd like us to know — false positives, missed issues, UI hiccups…"
+                maxlength="5000"
+              ></textarea>
+            </div>
+
+            <div class="field">
+              <label for="fb-email">Email (optional)</label>
+              <input
+                class="input"
+                id="fb-email"
+                type="email"
+                placeholder="If you'd like us to reach out"
+              />
+            </div>
+
+            <div class="row between">
+              <button
+                type="button"
+                class="btn btn-ghost"
+                onclick="history.back()"
+              >
+                ← Back
+              </button>
+              <button type="submit" class="btn btn-primary" id="btn-fb-submit">
+                Send Feedback
+              </button>
+            </div>
+          </form>
+
+          <div id="fb-thanks" hidden>
+            <div
+              style="
+                text-align: center;
+                padding: 32px 0;
+              "
+            >
+              <div style="font-size: 3rem">🙏</div>
+              <h2 style="margin: 12px 0 6px">Thank you!</h2>
+              <p class="muted">Your feedback helps SolGuard evolve.</p>
+              <button
+                class="btn btn-outline mt-16"
+                onclick="Router.go('landing')"
+              >
+                ← Back home
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
+
+    <footer class="site-footer">
+      <p>
+        Made with 🛡️ for the Solana ecosystem · MIT licensed ·
+        <a
+          href="https://github.com/Keybird0/SolGuard"
+          target="_blank"
+          rel="noopener"
+          >GitHub</a
+        >
+      </p>
+    </footer>
+
+    <div
+      class="toast-wrap"
+      id="toast-wrap"
+      aria-live="polite"
+      aria-atomic="true"
+      role="status"
+    ></div>
+
+    <!-- App (ES modules) -->
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

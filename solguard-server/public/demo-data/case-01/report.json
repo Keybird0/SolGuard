@@ -1,0 +1,35 @@
+{
+  "contract_name": "rw04_arbitrary_cpi",
+  "contract_path": "test-fixtures/real-world/small/rw04_arbitrary_cpi.rs",
+  "risk_level": "Critical",
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "Critical",
+      "title": "Arbitrary CPI — untrusted program substitution",
+      "location": "rw04_arbitrary_cpi.rs:23",
+      "description": "The instruction program id is taken directly from caller-controlled token_program AccountInfo and never constrained to the SPL Token program. A malicious program can be supplied and invoked with signer privileges, enabling arbitrary logic during the CPI.",
+      "impact": "Full loss of tokens held in accounts that the authority can sign for; attacker-controlled SBF code executes under the victim's signer privileges.",
+      "recommendation": "Constrain token_program to the canonical SPL Token program using Program<'info, Token> or require_keys_eq!(token_program.key(), anchor_spl::token::ID) before invoke, and prefer Anchor CPI helpers over manual invoke.",
+      "rule_id": "arbitrary_cpi",
+      "code_snippet": "let ix = spl_token::instruction::transfer(ctx.accounts.token_program.key, ...);\ninvoke(&ix, &[...])?;",
+      "confidence": 0.9,
+      "kill_signal": "proceed"
+    }
+  ],
+  "statistics": {
+    "critical": 1,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0,
+    "total": 1
+  },
+  "timestamp": "2026-04-25T02:07:00.000000+00:00",
+  "inputs_summary": "scan_hints=1 semgrep_hits=2 ai_provider=openai ai_model=gpt-5.4",
+  "source_visibility": "source",
+  "decision": "proceed",
+  "callback": {
+    "status": "completed"
+  }
+}

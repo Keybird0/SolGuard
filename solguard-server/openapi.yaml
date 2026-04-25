@@ -1,0 +1,494 @@
+openapi: 3.0.3
+info:
+  title: SolGuard Server API
+  version: 0.7.0
+  description: |
+    Backend for the SolGuard Solana security-audit skill. Accepts audit
+    requests (GitHub repos / Solana program addresses / whitepapers /
+    websites), handles Solana Pay, dispatches the OpenHarness skill, and
+    serves the Markdown / JSON reports.
+
+    ### Lifecycle (Phase 5 three-stage operator notifications)
+
+    1. **submitted** — client `POST /api/audit` → task created with
+       `status=paying` (or `paid` when `FREE_AUDIT=true`). Operators
+       receive a Lark "Stage 1 submitted" card.
+    2. **paid** — either the client pushes a signature via
+       `POST /api/audit/{id}/payment`, or the background poller sees the
+       on-chain transfer. Operators receive a Lark "Stage 2 paid" card.
+    3. **completed / failed** — the OpenHarness agent calls back
+       `POST /api/audit/{id}/complete`; the server sends the customer an
+       HTML email with `.md` + `.json` attachments and posts a severity-
+       coloured Lark card (red=critical, orange=high, green=clean,
+       red=failed).
+  license:
+    name: MIT
+    url: https://github.com/Keybird0/SolGuard/blob/main/LICENSE
+# Public endpoints use no auth; the single internal callback
+# (`POST /api/audit/{id}/complete`) picks up AgentSignature / AgentToken
+# via its `security:` block. Global default is "no auth required".
+security: []
+servers:
+  - url: http://localhost:3000
+    description: Local dev
+  - url: https://api.solguard.xyz
+    description: Production
+
+tags:
+  - name: audit
+  - name: feedback
+  - name: health
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } }
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } }
+
+  /api/audit:
+    post:
+      tags: [audit]
+      summary: Create an audit task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAuditRequest' }
+      responses:
+        '201':
+          description: Task created; may require Solana Pay payment.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/CreateAuditFreeResponse'
+                  - $ref: '#/components/schemas/CreateAuditPayingResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/PaymentNotConfigured' }
+
+  /api/audit/batch/{batchId}:
+    get:
+      tags: [audit]
+      summary: Get batch status + per-task progress
+      description: |
+        Returns the batch envelope plus every task in that batch. Used by the
+        web UI's progress poller (default interval 3s). Reports are only
+        included when a task has `status=completed`.
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Batch snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [batch, tasks]
+                properties:
+                  batch: { $ref: '#/components/schemas/AuditBatch' }
+                  tasks:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/audit/batch/{batchId}/payment:
+    post:
+      tags: [audit]
+      summary: Submit the Solana Pay signature for an entire batch
+      description: |
+        Client pushes the wallet-broadcast `signature` for atomic batch
+        payment. The server re-validates against the Solana RPC via
+        `validateTransfer(reference, recipient, amountSol)` and, on success,
+        flips every task in the batch from `paying` → `paid` and enqueues
+        them for audit. Failing verification preserves the batch state so
+        the user can retry.
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signature]
+              properties:
+                signature:
+                  type: string
+                  description: Solana transaction signature (base58, 64 bytes raw).
+      responses:
+        '200':
+          description: Verification attempted. `ok=false` preserves batch state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string, enum: [paying, paid, failed] }
+                  signature: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/audit/{taskId}:
+    get:
+      tags: [audit]
+      summary: Get a task
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task record (reportMarkdown redacted unless status=completed).
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuditTask' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/audit/{taskId}/payment:
+    post:
+      tags: [audit]
+      summary: Client-pushed payment signature (skip the poller)
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentPushRequest' }
+      responses:
+        '200':
+          description: Verification attempted. `ok=false` preserves status.
+          content: { application/json: { schema: { $ref: '#/components/schemas/PaymentPushResponse' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidState' }
+
+  /api/audit/{taskId}/complete:
+    post:
+      tags: [audit]
+      summary: Agent callback (internal) — submits findings + report
+      description: |
+        Auth: either `X-Agent-Signature: sha256=<hex>` over the raw body
+        keyed by `AGENT_CALLBACK_TOKEN`, or `X-Agent-Token` (legacy, rejected
+        in production when `AGENT_HMAC_REQUIRED=true`).
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      security:
+        - AgentSignature: []
+        - AgentToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentCompleteBody' }
+      responses:
+        '200':
+          description: Accepted and persisted.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CompleteResponse' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/audit/{taskId}/report.md:
+    get:
+      tags: [audit]
+      summary: Download the Markdown report
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Markdown report (attachment)
+          content:
+            text/markdown:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/ReportNotReady' }
+
+  /api/audit/{taskId}/report.json:
+    get:
+      tags: [audit]
+      summary: Public JSON snapshot of a completed audit
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Public report
+          content: { application/json: { schema: { $ref: '#/components/schemas/PublicReport' } } }
+        '404': { $ref: '#/components/responses/ReportNotReady' }
+
+  /api/feedback:
+    post:
+      tags: [feedback]
+      summary: Submit feedback (1-5 star + optional content)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Feedback' }
+      responses:
+        '200':
+          description: Stored
+          content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+components:
+  securitySchemes:
+    AgentSignature:
+      type: apiKey
+      in: header
+      name: X-Agent-Signature
+    AgentToken:
+      type: apiKey
+      in: header
+      name: X-Agent-Token
+
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    ValidationError:
+      description: Invalid request body
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unauthorized:
+      description: Missing / invalid agent auth
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    NotFound:
+      description: Task not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    InvalidState:
+      description: Task is not in a valid state for this action
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    ReportNotReady:
+      description: Report not yet available (task not completed)
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    PaymentNotConfigured:
+      description: SOLANA_SERVICE_WALLET not set and FREE_AUDIT is false
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    RateLimited:
+      description: Too many requests
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:    { type: string }
+        message: { type: string }
+        details: {}
+
+    Health:
+      type: object
+      properties:
+        status:   { type: string, example: ok }
+        version:  { type: string }
+        uptime:   { type: number }
+
+    AuditInput:
+      type: object
+      required: [type, value]
+      properties:
+        type:
+          type: string
+          enum: [github, contract_address, whitepaper, website]
+        value: { type: string }
+
+    CreateAuditRequest:
+      type: object
+      required: [inputs, email]
+      properties:
+        inputs:
+          type: array
+          items: { $ref: '#/components/schemas/AuditInput' }
+          minItems: 1
+          maxItems: 5
+        email: { type: string, format: email }
+
+    CreateAuditFreeResponse:
+      type: object
+      required: [taskId, status, freeAudit]
+      properties:
+        taskId:    { type: string, format: uuid }
+        status:    { type: string, enum: [paid] }
+        freeAudit: { type: boolean }
+
+    CreateAuditPayingResponse:
+      type: object
+      required: [taskId, status, paymentUrl, paymentReference, recipient, amountSol, cluster, expiresAt]
+      properties:
+        taskId:           { type: string, format: uuid }
+        status:           { type: string, enum: [paying] }
+        paymentUrl:       { type: string }
+        paymentReference: { type: string }
+        recipient:        { type: string }
+        amountSol:        { type: number }
+        cluster:          { type: string }
+        expiresAt:        { type: string, format: date-time }
+
+    PaymentPushRequest:
+      type: object
+      required: [signature]
+      description: Client-pushed Solana Pay signature (optimistic, skips the poller).
+      properties:
+        signature: { type: string, minLength: 32, description: Base58 transaction signature }
+
+    PaymentPushResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:        { type: boolean }
+        status:    { type: string }
+        signature: { type: string }
+        error:     { type: string }
+
+    Severity:
+      type: string
+      enum: [Critical, High, Medium, Low, Info]
+
+    Finding:
+      type: object
+      required: [id, severity, title, location, description, impact, recommendation]
+      properties:
+        id:             { type: string }
+        ruleId:         { type: string }
+        severity:       { $ref: '#/components/schemas/Severity' }
+        title:          { type: string }
+        location:       { type: string }
+        description:    { type: string }
+        impact:         { type: string }
+        recommendation: { type: string }
+        codeSnippet:    { type: string }
+        confidence:     { type: number }
+        killSignal:
+          type: object
+          properties:
+            isValid: { type: boolean }
+            reason:  { type: string }
+
+    Statistics:
+      type: object
+      properties:
+        critical: { type: integer }
+        high:     { type: integer }
+        medium:   { type: integer }
+        low:      { type: integer }
+        info:     { type: integer }
+        total:    { type: integer }
+
+    AgentCompleteBody:
+      type: object
+      properties:
+        status:          { type: string, enum: [completed, failed] }
+        findings:
+          type: array
+          items: { $ref: '#/components/schemas/Finding' }
+        statistics:      { $ref: '#/components/schemas/Statistics' }
+        reportMarkdown:  { type: string }
+        reportUrl:       { type: string, format: uri }
+        error:           { type: string }
+
+    CompleteResponse:
+      type: object
+      properties:
+        ok:     { type: boolean }
+        status: { type: string }
+
+    AuditBatch:
+      type: object
+      properties:
+        batchId:             { type: string }
+        taskIds:             { type: array, items: { type: string } }
+        email:               { type: string, format: email }
+        status:
+          type: string
+          enum: [paying, paid, failed]
+        totalAmountSol:      { type: number }
+        paymentReference:    { type: string }
+        paymentRecipient:    { type: string }
+        paymentUrl:          { type: string }
+        paymentSignature:    { type: string }
+        paymentExpiresAt:    { type: string, format: date-time }
+        paymentConfirmedAt:  { type: string, format: date-time }
+        cluster:             { type: string }
+        freeAudit:           { type: boolean }
+        createdAt:           { type: string, format: date-time }
+        updatedAt:           { type: string, format: date-time }
+
+    AuditTask:
+      type: object
+      properties:
+        taskId:           { type: string, format: uuid }
+        batchId:          { type: string }
+        inputs:
+          type: array
+          items: { $ref: '#/components/schemas/AuditInput' }
+        email:            { type: string, format: email }
+        status:
+          type: string
+          enum: [pending, paying, paid, scanning, analyzing, reporting, completed, failed]
+        progress:         { type: string }
+        progressPercent:  { type: number }
+        paymentReference: { type: string }
+        paymentSignature: { type: string }
+        paymentAmountSol: { type: number }
+        paymentRecipient: { type: string }
+        paymentUrl:       { type: string }
+        paymentExpiresAt: { type: string, format: date-time }
+        findings:
+          type: array
+          items: { $ref: '#/components/schemas/Finding' }
+        statistics:       { $ref: '#/components/schemas/Statistics' }
+        reportMarkdown:   { type: string }
+        reportUrl:        { type: string, format: uri }
+        error:            { type: string }
+        createdAt:        { type: string, format: date-time }
+        updatedAt:        { type: string, format: date-time }
+        completedAt:      { type: string, format: date-time }
+
+    PublicReport:
+      type: object
+      properties:
+        taskId:          { type: string }
+        status:          { type: string }
+        inputs:
+          type: array
+          items: { $ref: '#/components/schemas/AuditInput' }
+        statistics:      { $ref: '#/components/schemas/Statistics' }
+        findings:
+          type: array
+          items: { $ref: '#/components/schemas/Finding' }
+        reportUrl:       { type: string, format: uri }
+        createdAt:       { type: string, format: date-time }
+        updatedAt:       { type: string, format: date-time }
+        completedAt:     { type: string, format: date-time }
+        progress:        { type: string }
+        progressPercent: { type: number }
+
+    Feedback:
+      type: object
+      required: [rating]
+      properties:
+        taskId:  { type: string }
+        email:   { type: string, format: email }
+        rating:  { type: integer, minimum: 1, maximum: 5 }
+        content: { type: string, maxLength: 5000 }

@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+data-test
+tests
+src
+scripts
+README.md
+.env*
+.eslintrc.json
+.prettierrc.json
+.prettierignore
+tsconfig.json
+package-lock.json

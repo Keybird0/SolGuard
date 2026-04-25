@@ -1,0 +1,61 @@
+{
+  "contract_name": "rw12_staking_slice",
+  "contract_path": "test-fixtures/real-world/large/rw12_staking_slice.rs",
+  "risk_level": "High",
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "High",
+      "title": "Missing Owner Check",
+      "location": "rw12_staking_slice.rs:251",
+      "description": "The legacy_position account is a raw AccountInfo without any owner or discriminator checks, allowing any account with compatible bytes to be accepted, leading to potential spoofing.",
+      "impact": "Attacker-controlled accounts can spoof valid legacy_position data and claim rewards proportional to a fake staked amount.",
+      "recommendation": "Replace with `Account<'info, LegacyPosition>` (Anchor enforces owner + discriminator), or add an explicit require_keys_eq!(legacy_position.owner, &crate::ID).",
+      "rule_id": "missing_owner_check",
+      "code_snippet": "pub legacy_position: AccountInfo<'info>",
+      "confidence": 0.9,
+      "kill_signal": "proceed"
+    },
+    {
+      "id": "F-002",
+      "severity": "High",
+      "title": "Account Data Matching",
+      "location": "rw12_staking_slice.rs:129",
+      "description": "Manual deserialization of legacy_position data bypasses Anchor's discriminator and owner checks, allowing attacker-controlled accounts to spoof valid data.",
+      "impact": "Two-step account spoof combined with the missing owner check feeds attacker bytes into reward calculations.",
+      "recommendation": "Avoid manual deserialization on raw AccountInfo; instead, use Anchor Account types with proper ownership and discriminator enforcement.",
+      "rule_id": "account_data_matching",
+      "code_snippet": "let view = LegacyPosition::try_from_slice(&raw)?;",
+      "confidence": 0.9,
+      "kill_signal": "proceed"
+    },
+    {
+      "id": "F-003",
+      "severity": "Medium",
+      "title": "Integer Overflow",
+      "location": "rw12_staking_slice.rs:142",
+      "description": "In apply_rewards, the multiplication ctx.accounts.pool.reward_rate * multiplier is unchecked and can overflow silently, leading to incorrect reward rates.",
+      "impact": "Today bounded by an upstream u8 cap (≤10); a future refactor widening multiplier would silently enable overflow.",
+      "recommendation": "Use checked_mul(... as u64).ok_or(ErrorCode::Overflow)?, and enable overflow-checks = true in the release profile.",
+      "rule_id": "integer_overflow",
+      "code_snippet": "let new_rate = ctx.accounts.pool.reward_rate * multiplier;",
+      "confidence": 0.9,
+      "kill_signal": "review"
+    }
+  ],
+  "statistics": {
+    "critical": 0,
+    "high": 2,
+    "medium": 1,
+    "low": 0,
+    "info": 0,
+    "total": 3
+  },
+  "timestamp": "2026-04-25T02:07:19.000000+00:00",
+  "inputs_summary": "scan_hints=2 semgrep_hits=4 ai_provider=openai ai_model=gpt-5.4",
+  "source_visibility": "source",
+  "decision": "proceed",
+  "callback": {
+    "status": "completed"
+  }
+}
