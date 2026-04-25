@@ -1,4 +1,9 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 SolGuard Contributors
+import path from 'node:path';
+import { config } from '../config';
 import type { AuditTask } from '../types';
+import { FileJsonTaskStore } from './file-json-task-store';
 
 export interface TaskStore {
   create(task: AuditTask): Promise<AuditTask>;
@@ -61,7 +66,15 @@ let singleton: TaskStore | null = null;
 
 export function getTaskStore(): TaskStore {
   if (!singleton) {
-    singleton = new InMemoryTaskStore();
+    if (config.taskStore === 'file-json') {
+      singleton = new FileJsonTaskStore(path.join(config.dataDir, 'tasks'));
+    } else {
+      singleton = new InMemoryTaskStore();
+    }
   }
   return singleton;
+}
+
+export function setTaskStoreForTesting(store: TaskStore | null): void {
+  singleton = store;
 }

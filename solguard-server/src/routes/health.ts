@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 SolGuard Contributors
 import { spawnSync } from 'node:child_process';
 import { Router } from 'express';
-import { config, hasAnyLlmKey } from '../config';
+import { config, hasAnyLlmKey, isPaymentConfigured } from '../config';
 
 const router = Router();
 
@@ -25,6 +27,9 @@ router.get('/healthz', (_req, res) => {
       ohCli: checkOhCli(),
       llmKey: hasAnyLlmKey(),
       solanaCluster: config.solanaCluster,
+      paymentConfigured: isPaymentConfigured(),
+      freeAudit: config.freeAudit,
+      auditPriceSol: config.auditPriceSol,
     },
     timestamp: new Date().toISOString(),
   });

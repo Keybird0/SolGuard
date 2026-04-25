@@ -8,12 +8,73 @@ export type TaskStatus =
   | 'completed'
   | 'failed';
 
-export type InputType = 'github' | 'contract_address' | 'whitepaper' | 'website';
+export type InputType =
+  | 'github'
+  | 'contract_address'
+  | 'whitepaper'
+  | 'website'
+  | 'more_info';
 
 export interface AuditInput {
   type: InputType;
   value: string;
 }
+
+/**
+ * Target = one project being audited. A submission can carry multiple
+ * Targets (each becomes its own AuditTask); all tasks share a single
+ * AuditBatch for atomic pricing and payment.
+ */
+export interface AuditTarget {
+  github?: string;
+  contractAddress?: string;
+  whitepaper?: string;
+  website?: string;
+  moreInfo?: string;
+}
+
+export type BatchStatus = 'paying' | 'paid' | 'failed';
+
+export interface AuditBatch {
+  batchId: string;
+  taskIds: string[];
+  email: string;
+
+  status: BatchStatus;
+  totalAmountSol: number;
+
+  paymentReference?: string;
+  paymentRecipient?: string;
+  paymentUrl?: string;
+  paymentSignature?: string;
+  paymentExpiresAt?: string;
+  paymentConfirmedAt?: string;
+
+  cluster: string;
+  freeAudit?: boolean;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NormalizedInput =
+  | {
+      kind: 'rust_source';
+      rootDir: string;
+      primaryFile?: string;
+      origin: AuditInput;
+    }
+  | {
+      kind: 'bytecode_only';
+      programId: string;
+      bytecodePath: string;
+      origin: AuditInput;
+    }
+  | {
+      kind: 'lead_only';
+      leadsJsonPath: string;
+      origin: AuditInput;
+    };
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 
@@ -45,6 +106,7 @@ export interface Statistics {
 
 export interface AuditTask {
   taskId: string;
+  batchId?: string;
   inputs: AuditInput[];
   email: string;
 
@@ -55,6 +117,12 @@ export interface AuditTask {
   paymentReference?: string;
   paymentSignature?: string;
   paymentAmountSol?: number;
+  paymentRecipient?: string;
+  paymentUrl?: string;
+  paymentExpiresAt?: string;
+
+  normalizedInputs?: NormalizedInput[];
+  normalizeError?: string;
 
   findings?: Finding[];
   statistics?: Statistics;
@@ -72,4 +140,17 @@ export interface ApiError {
   code: string;
   message: string;
   details?: unknown;
+}
+
+export interface AgentEvent {
+  type:
+    | 'tool_call_start'
+    | 'tool_call_end'
+    | 'thought'
+    | 'final_result'
+    | 'error'
+    | 'unknown';
+  tool?: string;
+  data?: unknown;
+  raw?: string;
 }

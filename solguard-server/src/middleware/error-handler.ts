@@ -15,6 +15,10 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof ZodError) {
+    logger.warn(
+      { issues: err.errors, path: req.path, method: req.method },
+      'ZodError validation failed',
+    );
     const apiErr: ApiError = {
       code: 'VALIDATION_ERROR',
       message: 'Invalid request payload',
