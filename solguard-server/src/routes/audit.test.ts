@@ -427,13 +427,18 @@ describe('POST /api/audit (batch / targets[])', () => {
   });
 
   it('rejects moreInfo > 2000 chars', async () => {
+    // Multi-line so we hit the Zod max(2000) check rather than the
+    // single-line OVERLONG_LINE heuristic guard at 500 chars.
+    const overflow = Array.from({ length: 26 }, () => 'x'.repeat(80))
+      .join('\n')
+      .slice(0, 2001);
     const res = await request(app)
       .post('/api/audit')
       .send({
         targets: [
           {
             github: 'https://github.com/solana-labs/example',
-            moreInfo: 'x'.repeat(2001),
+            moreInfo: overflow,
           },
         ],
         email: 'u@example.com',

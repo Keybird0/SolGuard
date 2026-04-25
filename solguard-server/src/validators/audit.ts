@@ -1,5 +1,23 @@
 import { z } from 'zod';
 import type { InputType } from '../types';
+import { validateMoreInfo } from './more-info-guard';
+
+/**
+ * Run the heuristic prompt-injection guard inside a Zod refine. Returns
+ * a result object that Zod can attach to the right field path. Centralised
+ * here so both the legacy `auditInputSchema` (single-target shape) and
+ * the P4.6 `targetSchema` (Target card shape) share the same wording.
+ */
+function moreInfoRefine(value: string, ctx: z.RefinementCtx): void {
+  const r = validateMoreInfo(value);
+  if (!r.ok) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: r.reason,
+      params: { code: 'MALICIOUS_INPUT', ruleId: r.ruleId },
+    });
+  }
+}
 
 const SOLANA_ADDRESS_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const GITHUB_URL_REGEX = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
@@ -26,7 +44,11 @@ export const auditInputSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('more_info'),
-    value: z.string().min(1).max(2000, 'More Info must be 2000 characters or fewer'),
+    value: z
+      .string()
+      .min(1)
+      .max(2000, 'More Info must be 2000 characters or fewer')
+      .superRefine(moreInfoRefine),
   }),
 ]);
 
@@ -78,6 +100,7 @@ export const targetSchema = z
         .string()
         .min(1)
         .max(2000, 'More Info must be 2000 characters or fewer')
+        .superRefine(moreInfoRefine)
         .optional(),
     ),
   })
