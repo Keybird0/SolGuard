@@ -1,0 +1,25 @@
+rules:
+  - id: solana-raw-arithmetic-on-balance
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      Raw arithmetic (`+`, `-`, `*`) on a numeric account field without
+      `checked_*`. Anchor release builds do NOT enable overflow-checks, so
+      wrap-around is silent — convert to `.checked_add` / `.checked_sub` or
+      explicit saturating variants.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $LHS.balance = $LHS.balance + $RHS
+          - pattern: |
+              $LHS.balance = $LHS.balance - $RHS
+          - pattern: |
+              $LHS.amount = $LHS.amount + $RHS
+          - pattern: |
+              $LHS.amount = $LHS.amount - $RHS
+          - pattern: |
+              $LHS.amount = $LHS.amount * $RHS
+    metadata:
+      category: security
+      subcategory: solana
+      anchor_ref: "#integer_overflow"

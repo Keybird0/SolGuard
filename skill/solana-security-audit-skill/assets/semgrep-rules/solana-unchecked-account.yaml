@@ -1,0 +1,26 @@
+rules:
+  - id: solana-unchecked-accountinfo-field
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      `AccountInfo`/`UncheckedAccount` field detected on a `#[derive(Accounts)]`
+      struct. Make sure at least one of `Signer`, `seeds=`, `owner=`,
+      `has_one=`, or a `require_keys_eq!` check validates it — otherwise any
+      caller-provided account is accepted.
+    pattern-either:
+      - pattern: |
+          struct $S<'info> {
+              ...,
+              pub $NAME: AccountInfo<'info>,
+              ...
+          }
+      - pattern: |
+          struct $S<'info> {
+              ...,
+              pub $NAME: UncheckedAccount<'info>,
+              ...
+          }
+    metadata:
+      category: security
+      subcategory: solana
+      anchor_ref: "#missing_signer_check"

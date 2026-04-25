@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 SolGuard Contributors
+#
+# Solana Security Audit Skill — tool manifest
+#
+# NOTE ON OPENHARNESS COMPATIBILITY
+# ---------------------------------
+# OpenHarness 0.1.x discovers skills by reading `SKILL.md` only; it does not
+# yet parse a dedicated `skill.yaml`. This file is therefore the
+# **single authoritative listing** of the five Python tools that the Agent
+# may invoke through the `oh -p` path, and is consumed by:
+#
+#   * `scripts/oh_skill_smoke.sh`            — verifies each tool's
+#                                              Python entry is importable.
+#   * `solguard-server/src/runners/*`        — Python-runner fallback path
+#                                              reads this file to know
+#                                              which tools to pre-warm.
+#   * Future OpenHarness releases that gain formal `tools:` support.
+#
+# If you add / remove / rename a tool, **update three places** in one commit:
+#   1) this file
+#   2) SKILL.md §"Tool contract" table
+#   3) solguard-server/src/audit-engine.ts buildAuditPrompt + TOOL_STATUS_MAP
+
+name: solana-security-audit-skill
+version: 0.1.0-alpha
+description: >-
+  AI-first Solana / Anchor security audit orchestration. Five Python
+  tools implement the six-step SOP defined in SKILL.md; LLM calls go
+  through `solana_ai_analyze` exclusively.
+
+# The `tools[]` array matches the strict execution order enforced by the
+# Agent prompt. Each entry is sufficient to `python -c "from <module>
+# import <class>; <class>().execute(**args)"`.
+tools:
+  - name: solana_parse
+    step: 2
+    entry: tools.solana_parse:SolanaParseTool
+    description: Parse Rust / Anchor source into ParsedContract.
+    inputs: [code, code_path]
+    output_schema: core.types.ParsedContract
+
+  - name: solana_scan
+    step: 3
+    entry: tools.solana_scan:SolanaScanTool
+    description: Run every rule in tools/rules/ on a ParsedContract.
+    inputs: [parsed]
+    output_schema: { findings: "Finding[]", statistics: object, errors: "string[]" }
+
+  - name: solana_semgrep
+    step: 4
+    entry: tools.semgrep_runner:SemgrepRunner
+    description: Run tools/semgrep_rules/*.yaml via `semgrep --json`.
+    inputs: [root_dir, rules_dir]
+    output_schema: { results: object, tool_error: string }
+
+  - name: solana_ai_analyze
+    step: 5
+    entry: ai.analyzer_tool:AIAnalyzerTool
+    description: >-
+      Dual-role LLM call — cross-validate scan+semgrep hints (Kill-Signal
+      inline) AND explore for new vulnerabilities. Returns
+      {confirmed, exploratory, rejected, decision, token_usage}.
+    inputs: [parse_result, scan_hints, semgrep_raw, source_code, file_path]
+    output_schema:
+      confirmed: "Finding[]"
+      exploratory: "Finding[]"
+      rejected: "Finding[]"
+      decision: "ok | degraded"
+      token_usage: object
+
+  - name: solana_report
+    step: 6
+    entry: tools.solana_report:SolanaReportTool
+    description: Render three-tier Markdown + JSON envelope with SHA-256 per artefact.
+    inputs: [findings, statistics, metadata, output_root]
+    output_schema:
+      risk_summary_md: path
+      assessment_md: path
+      checklist_md: path
+      report_json: path
+
+# `runner_hints` is consumed by solguard-server for fallback routing.
+runner_hints:
+  preferred: openharness-agent
+  fallback: python-subprocess
+  python:
+    cwd: "."
+    command: ["uv", "run", "python", "scripts/run_audit.py"]

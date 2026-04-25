@@ -1,0 +1,19 @@
+rules:
+  - id: solana-manual-accountinfo-deserialize
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Manual deserialization (`try_from_slice` / `AnchorDeserialize::deserialize`
+      / `try_borrow_*_data` pipeline) on a raw account — bypasses Anchor's
+      discriminator and owner checks, so an attacker-owned account whose
+      bytes happen to parse into the struct is accepted. Prefer
+      `Account<'info, T>` or explicit `require_keys_eq!(acct.owner, &crate::ID)`.
+    patterns:
+      - pattern-either:
+          - pattern: AnchorDeserialize::deserialize(&mut $X)
+          - pattern: BorshDeserialize::deserialize(&mut $X)
+          - pattern: $T::try_from_slice($X)
+    metadata:
+      category: security
+      subcategory: solana
+      anchor_ref: "#account_data_matching"
