@@ -50,7 +50,8 @@
 
 - **4 类输入** — GitHub 仓库 · 链上程序地址 · 白皮书 URL · 项目官网
 - **7 条 Solana 专属规则** — Signer 检查缺失 · Owner 检查缺失 · 任意 CPI · 整数溢出 · 账户数据匹配 · PDA 派生错误 · 未初始化账户
-- **Skill-first L3/L4 AI 研判**（v0.8）— 由外层 Agent 按 `references/l3-agents-playbook.md` 自主扮演 *A1 Prompt Explorer* + *A2 KB Checklist*，再按 `l4-judge-playbook.md` 依次跑 **Kill-Signal → Counter-Question 六问 → Attack Scenario 六步 → 7-Question Gate** 四闸；五个确定性 Python *thin tool* 负责落地每一步判决。Phase 6 基线 → Round 2，F1 从 **0.46 → 0.71**，召回 **0.71 → 0.94**，精确率 **0.34 → 0.57**，平均耗时 **12.9 s → 11.4 s**。
+- **Skill-first L3/L4 AI 研判**（v0.9）— 由外层 Agent 按 `references/l3-agents-playbook.md` 自主扮演 *A1 Prompt Explorer* + *A2 KB Checklist* + *A3 Deep-Dive*，再按 `l4-judge-playbook.md` 依次跑 **Kill-Signal → Counter-Question 六问 → Attack Scenario 六步 → 7-Question Gate** 四闸；五个确定性 Python *thin tool* 负责落地每一步判决。**A3 Deep-Dive**（v0.9）专攻 A1/A2 单 handler 视角看不到的 4 类盲点：sibling-drift / cross-cpi-taint / callee-arith / authority-drop。**Gate1/Gate4 加固**（v0.9）：Gate1 在 scope 不可解析时改为 skip-match（之前回退到全文件 regex 易误杀）；Gate4 Q3 对 `rule_id=null` 的 A1 novel finding 改为 provisional PASS（之前会被单独 KILL）。Phase 6 基线 → Round 2，F1 从 **0.46 → 0.71**，召回 **0.71 → 0.94**，精确率 **0.34 → 0.57**，平均耗时 **12.9 s → 11.4 s**。
+- **多运行时 SKILL**（v0.9）— SKILL 既支持 **OpenHarness Agent**（`oh -p`），也支持 **Claude Code**（通过 `scripts/skill_tool.py` stdin/stdout JSON 调度器；软链装入 `~/.claude/skills/`）。
 - **三级报告** — 风险总结（高管视角）· 合约评估（技术详情）· 审计清单（可执行）
 - **Solana Pay 结账** — 钱包内原生支付，10 秒完成，支持 Devnet / Mainnet
 - **邮件通知 + 反馈闭环** — 报告直接送达邮箱；签名反馈闭环
@@ -207,15 +208,16 @@ uv export --format requirements-txt --no-hashes --no-dev > requirements.txt
 
 每条规则的定义 / bad code / good code / 检测注意事项 / 外链：[`docs/knowledge/solana-vulnerabilities.md`](./docs/knowledge/solana-vulnerabilities.md)。
 
-### Skill-first L3/L4 研判管线（Step 5，v0.8）
+### Skill-first L3/L4 研判管线（Step 5，v0.9）
 
-M1 阶段"一次黑盒 `solana_ai_analyze`"在 2026-04 被重构为两份 markdown playbook + 五个确定性 thin tool。Agent 自己扮演 A1 / A2 / Gate-2 / Gate-3；Python 只做机械落地。
+M1 阶段"一次黑盒 `solana_ai_analyze`"在 2026-04 被重构为两份 markdown playbook + 五个确定性 thin tool（v0.8）。v0.9（2026-04-26）新增 A3 Deep-Dive 作为第三个 L3 Agent，加固 Gate1 scope fallback（不再回退全文件 regex），软化 Gate4 Q3（`rule_id=null` 不再单独 KILL）。Agent 自己扮演 A1 / A2 / A3 / Gate-2 / Gate-3；Python 只做机械落地。
 
 | 阶段 | 由谁扮演 | Tool | 是否 LLM |
 |---|---|---|---|
-| L3 · A1 Prompt Explorer（temp 0.6，开放式提示） | Agent 按 `references/l3-agents-playbook.md §A1` | — | 是（Agent） |
-| L3 · A2 KB Checklist（temp 0.1，严格 JSON） | Agent 按 `l3-agents-playbook.md §A2` | — | 是（Agent） |
-| L3 · Merge | Agent 按 `(rule_id, location)` 去重 + severity 取高 | — | 否 |
+| L3 · A1 Prompt Explorer（temp 0.6，开放式提示） | Agent 按 `references/l3-agents-playbook.md §1` | — | 是（Agent） |
+| L3 · A2 KB Checklist（temp 0.1，严格 JSON） | Agent 按 `l3-agents-playbook.md §2` | — | 是（Agent） |
+| L3 · A3 Deep-Dive（temp 0.2，A1+A2 merge 后） | Agent 按 `l3-agents-playbook.md §3` — 覆盖 sibling-drift / cross-cpi-taint / callee-arith / authority-drop 4 类盲点 | — | 是（Agent，条件触发） |
+| L3 · Merge | Agent 按 `(rule_id, location)` 去重 + severity 取高；A3 带 `→` 路径的 reason 优先覆盖 | — | 否 |
 | L4 Gate 1 · Kill Signal | 对 KB `kill_signals[]` 做正则 + AST | `solana_kill_signal` | 否 |
 | L4 Gate 2 · Counter-Question 六问 | Agent 按 `l4-judge-playbook.md §2`，每条 High/Critical 必过 | `solana_cq_verdict`（KILL/DOWNGRADE/KEEP 落地 + severity floor） | 是（Agent） |
 | L4 Gate 3 · Attack Scenario 六步 | Agent 按 `l4-judge-playbook.md §3`，CALL/RESULT 为空 ⇒ KILL，NET-ROI < 1 ⇒ DOWNGRADE | `solana_attack_classify` | 是（Agent） |
@@ -259,17 +261,18 @@ SolGuard 提供 OpenAPI 3 REST API。规范文件：[`solguard-server/openapi.ya
 - **Phase 4** — Web UI ✅
 - **Phase 5** — 集成 + 部署 ✅
 - **Phase 6** — 基准测试 + 准确率调优 ✅
-- **Phase 7** — 文档 + 演示 + 提交 🚧（10/12 ✅，演示视频 / GitHub Release / 黑客松提交等用户手动项）
+- **Phase 7** — 文档 + 演示 + 提交 ✅（12/12，仓库内文档全部交付；演示视频 / GitHub Release / 黑客松提交为用户手动项）
 - **M1 · Skill-first L3/L4 重构（2026-04-25）** ✅ — 2 份 playbook + 5 个确定性 thin tool 替换原 `solana_ai_analyze` 黑盒；净 Python −1100 行 / +600 行 Agent 可读 SOP。
+- **M2 · A3 Deep-Dive Agent + Gate1/4 加固 + Claude Code dispatcher（2026-04-26，v0.9）** ✅ — A3 按 playbook 形式落地为 `references/l3-agents-playbook.md §3`（sibling-drift / cross-cpi-taint / callee-arith / authority-drop，0 行新 Python）；Gate1 scope 不可解析时不再回退全文件；Gate4 Q3 不再单独 KILL `rule_id=null` 候选；`scripts/skill_tool.py` 让 SKILL 通过软链装入 `~/.claude/skills/` 即可在 Claude Code 内运行。在 5 个目标（3 sealevel + 1 inline Cashio PoC + 1 真实 SPL Token）上端到端验证通过。
 
-**后续迭代方向评估**（相对于 skill-first 基线）：
+**后续迭代方向评估**（相对于 v0.9 基线）：
 
-1. **M2 · A3 deep-dive agent** — A3 也按 playbook 形式落地（`references/l3-agents-playbook.md §A3`），针对高危 handler 切入 AST call-graph；Python 仍只做辅助 thin tool。
-2. **M3 · RAG / Memory** — 与 skill-first 正交；接入 A2 KB Checklist，从 `references/vulnerability-patterns.md` 和历史审计库检索 pattern 样例。
+1. **VF-001 · KB 完整性** — `knowledge/solana_bug_patterns.json` 缺 `integer_overflow` 模式，导致 Gate4 Q3 把合法的 integer_overflow 候选 KILL 掉。v0.9 verification 跑批中暴露（详见 `outputs/verifi/SUMMARY.md`）。修复：补 ~50 行 KB JSON。
+2. **M3 · RAG / Memory** — 与 skill-first 正交；接入 A2 KB Checklist，从历史审计库检索 pattern 样例。触发条件：案例池累计 ≥ 100 真实审计。
 3. **基准可复现性** — Gate 2 / Gate 3 引入 LLM 抖动；若后续需要硬复现，通过 legacy `solana_ai_analyze`（`deprecated:true` 仍可用）固化 `round2-prompt` 数值。
-4. **成本护栏** — 单 task 预算（`SOLANA_AUDIT_BUDGET`）和 Medium 采样率（`l4-judge-playbook.md §2.5` 默认 `0.25`）是两个主要杠杆；当前尚无项目级预算账本。
+4. **成本护栏** — 单 task 预算（`SOLANA_AUDIT_BUDGET`）和 Medium 采样率（`l4-judge-playbook.md §2.5` 默认 `0.25`）是两个主要杠杆；项目级预算账本仍 TODO。
 5. **前端打磨** — 确保 UI 与 1–5 target batch 对齐；在进度 stepper 增加按 gate 的状态灯（"Gate 2 · 3/5 完成"）。
-6. **安全加固** — `ai/judge/kill_signal.py` 在候选行不落在 function / account struct 时回退到 file-wide scope，会误伤；建议改为 "skip match"，见 `docs/04-SolGuard项目管理/03-Phase2-Skill与工具开发.md §架构演进` smoke-test 调试记录。
+6. **A3 v2 跨文件** — 当前 A3 限当前文件内；跨文件 callgraph 切片留 A3 v2，依赖 tree-sitter-rust（`uv sync --extra parser`）。
 
 详见 [`docs/04-SolGuard项目管理/`](../docs/04-SolGuard%E9%A1%B9%E7%9B%AE%E7%AE%A1%E7%90%86/) 和迭代评估 [`docs/03-现有材料与项目规划/03-SolGuard项目开发规划.md §13`](../docs/03-%E7%8E%B0%E6%9C%89%E6%9D%90%E6%96%99%E4%B8%8E%E9%A1%B9%E7%9B%AE%E8%A7%84%E5%88%92/03-SolGuard%E9%A1%B9%E7%9B%AE%E5%BC%80%E5%8F%91%E8%A7%84%E5%88%92.md)。
 

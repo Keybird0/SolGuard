@@ -50,7 +50,8 @@ Click **[solguard-demo.vercel.app](https://solguard-demo.vercel.app/)** — a fu
 
 - **4 input types** — GitHub repo · on-chain program address · whitepaper URL · project website
 - **7 Solana-specific rules** — Missing Signer Check · Missing Owner Check · Arbitrary CPI · Integer Overflow · Account Data Matching · PDA Derivation Error · Uninitialized Account
-- **Skill-first L3/L4 AI judgment** (v0.8) — Agent plays *A1 Prompt Explorer* + *A2 KB Checklist* per `references/l3-agents-playbook.md`, then runs the 4-gate L4 (Kill-Signal → Counter-Question 6Q → Attack Scenario 6-step → 7-Question Gate) per `l4-judge-playbook.md`; five deterministic Python *thin tools* land every gate's verdict with zero LLM surprises. Phase 6 baseline → round 2 lifted F1 from **0.46 → 0.71** (recall **0.71 → 0.94**, precision **0.34 → 0.57**), avg run **12.9 s → 11.4 s**.
+- **Skill-first L3/L4 AI judgment** (v0.9) — Agent plays *A1 Prompt Explorer* + *A2 KB Checklist* + *A3 Deep-Dive* per `references/l3-agents-playbook.md`, then runs the 4-gate L4 (Kill-Signal → Counter-Question 6Q → Attack Scenario 6-step → 7-Question Gate) per `l4-judge-playbook.md`; five deterministic Python *thin tools* land every gate's verdict with zero LLM surprises. **A3 Deep-Dive** (v0.9) catches sibling-drift / cross-cpi-taint / callee-arith / authority-drop blind spots A1/A2 cannot see from a single-handler view. **Gate1/Gate4 hardening** (v0.9): Gate1 skip-matches when scope unresolvable (was: full-file fallback → over-KILL); Gate4 Q3 returns provisional PASS for `rule_id=null` (was: unilateral KILL of A1 novel findings). Phase 6 baseline → round 2 lifted F1 from **0.46 → 0.71** (recall **0.71 → 0.94**, precision **0.34 → 0.57**), avg run **12.9 s → 11.4 s**.
+- **Multi-runtime SKILL** (v0.9) — runs natively on **OpenHarness Agent** (`oh -p`) AND **Claude Code** (via `scripts/skill_tool.py` stdin/stdout JSON dispatcher; symlink installation into `~/.claude/skills/`).
 - **3-tier report** — Risk Summary (executive) · Contract Assessment (technical) · Audit Checklist (actionable)
 - **Solana Pay checkout** — native in-wallet payment in < 10 seconds, Devnet or Mainnet
 - **Email delivery + feedback loop** — reports sent to your inbox; signed feedback closes the loop
@@ -215,9 +216,9 @@ Rules are implemented in [`skill/solana-security-audit-skill/tools/rules/`](./sk
 
 Deep-dive per rule (definition · bad/good code · detection notes · external refs): [`docs/knowledge/solana-vulnerabilities.md`](./docs/knowledge/solana-vulnerabilities.md).
 
-### Skill-first L3/L4 judgment pipeline (Step 5, v0.8)
+### Skill-first L3/L4 judgment pipeline (Step 5, v0.9)
 
-The M1 Step-5 "one black-box LLM call" was refactored into two markdown playbooks + five deterministic thin tools in April 2026. The Agent plays A1 / A2 / Gate-2 / Gate-3 directly; Python only does the mechanical landing work.
+The M1 Step-5 "one black-box LLM call" was refactored into two markdown playbooks + five deterministic thin tools (April 2026, v0.8). v0.9 (2026-04-26) adds A3 Deep-Dive as a third L3 agent, hardens Gate1's scope fallback (skip-match instead of file-wide regex), and softens Gate4 Q3 to provisional PASS for `rule_id=null` so A1 novel findings are not unilaterally killed. The Agent plays A1 / A2 / A3 / Gate-2 / Gate-3 directly; Python only does the mechanical landing work.
 
 | Stage | Plays | Tool | LLM? |
 |---|---|---|---|
@@ -270,17 +271,18 @@ Key endpoints:
 - **Phase 4** — Web UI ✅
 - **Phase 5** — Integration + deployment ✅
 - **Phase 6** — Benchmark + accuracy tuning ✅
-- **Phase 7** — Docs + demo + submission 🚧 (10/12 ✅ · video + GitHub Release + hackathon form held for manual execution)
+- **Phase 7** — Docs + demo + submission ✅ (12/12 · all in-repo docs landed; video + GitHub Release + hackathon form held for manual execution)
 - **M1 · Skill-first L3/L4 refactor (2026-04-25)** ✅ — two markdown playbooks + five deterministic thin tools replace the single `solana_ai_analyze` black box; net −1100 lines of Python / +600 lines of Agent-readable SOP.
+- **M2 · A3 Deep-Dive Agent + Gate1/4 hardening + Claude Code dispatcher (2026-04-26, v0.9)** ✅ — A3 lands as `references/l3-agents-playbook.md §3` (sibling-drift / cross-cpi-taint / callee-arith / authority-drop, 0 new Python tool); Gate1 stops file-wide fallback when scope is unresolvable; Gate4 Q3 stops killing A1 novel `rule_id=null` candidates; `scripts/skill_tool.py` makes the SKILL runnable on Claude Code via symlink install. Verified end-to-end on 5 targets (3 sealevel + 1 inline Cashio PoC + 1 real SPL Token).
 
-**Forward-looking optimisation themes** (non-binding, evaluated against the skill-first baseline):
+**Forward-looking optimisation themes** (non-binding, evaluated against the v0.9 baseline):
 
-1. **M2 · A3 deep-dive agent** — per the plan, A3 will also land as a playbook (`references/l3-agents-playbook.md §A3`) that feeds AST call-graph slices for risky handlers; keeps Python to helper thin tools.
-2. **M3 · RAG / memory** — orthogonal to the skill-first refactor; plug into A2 Checklist to retrieve pattern-specific exemplars from `references/vulnerability-patterns.md` and past audits.
-3. **Benchmark determinism** — Gate 2 / Gate 3 now carry LLM variance; if future hackathons need hard reproducibility, pin `round2-prompt` results via the legacy `solana_ai_analyze` path (still available under `deprecated:true`).
-4. **Cost guardrails** — per-task budget (`SOLANA_AUDIT_BUDGET`) and Medium-severity sampling rate (`0.25` by default in `l4-judge-playbook.md §2.5`) are the two levers; today there is no per-project budget accounting.
+1. **VF-001 · KB completeness** — `knowledge/solana_bug_patterns.json` is missing an `integer_overflow` pattern, so Gate4 Q3 KILLs valid integer_overflow candidates. Surfaced by the v0.9 verification batch (`outputs/verifi/SUMMARY.md`). Fix: add ~50 lines of KB JSON for that pattern.
+2. **M3 · RAG / memory** — orthogonal to the skill-first refactor; plug into A2 Checklist to retrieve pattern-specific exemplars from past audits. Trigger: case pool ≥ 100 real audits.
+3. **Benchmark determinism** — Gate 2 / Gate 3 carry LLM variance; if future hackathons need hard reproducibility, pin `round2-prompt` results via the legacy `solana_ai_analyze` path (still available under `deprecated:true`).
+4. **Cost guardrails** — per-task budget (`SOLANA_AUDIT_BUDGET`) and Medium-severity sampling rate (`0.25` by default in `l4-judge-playbook.md §2.5`) are the two levers; per-project budget accounting still TODO.
 5. **Frontend polish** — keep the UI aligned with 1–5 target batches; add per-gate status beacons in the progress stepper so users can see "Gate 2 · 3/5 done".
-6. **Security hardening** — `ai/judge/kill_signal.py` still falls back to file-wide scope when a candidate's line isn't inside a function / account struct; consider tightening to "skip match" instead of "file" to cut over-killing (see the smoke-test debug notes in `docs/04-SolGuard项目管理/03-Phase2-Skill与工具开发.md §架构演进`).
+6. **A3 v2 cross-file** — current A3 stays inside the supplied file; cross-file callgraph slicing is reserved for A3 v2 once we have a tree-sitter-rust dep (`uv sync --extra parser`).
 
 See the full plan + milestones in [`docs/04-SolGuard项目管理/`](../docs/04-SolGuard%E9%A1%B9%E7%9B%AE%E7%AE%A1%E7%90%86/) and the iteration evaluation in [`docs/03-现有材料与项目规划/03-SolGuard项目开发规划.md §13`](../docs/03-%E7%8E%B0%E6%9C%89%E6%9D%90%E6%96%99%E4%B8%8E%E9%A1%B9%E7%9B%AE%E8%A7%84%E5%88%92/03-SolGuard%E9%A1%B9%E7%9B%AE%E5%BC%80%E5%8F%91%E8%A7%84%E5%88%92.md).
 
