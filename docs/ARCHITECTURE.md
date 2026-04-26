@@ -21,7 +21,7 @@ flowchart TB
         Email[Email Notifier · SMTP]
     end
 
-    subgraph Skill[OpenHarness Agent · Python ≥ 3.11<br/>Skill-first SOP · v0.8]
+    subgraph Skill[OpenHarness Agent · Python ≥ 3.11<br/>Skill-first SOP · v0.9]
         direction TB
         Parse[solana_parse<br/>regex + AST]
         Scan[solana_scan<br/>7 deterministic rules]

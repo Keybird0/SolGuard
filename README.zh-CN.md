@@ -74,9 +74,9 @@ flowchart LR
     S -->|SMTP| E[(邮件)]
     S -->|Solana Pay poller| C[(Solana Devnet<br/>Mainnet)]
 
-    subgraph Claude Code 运行时 · v0.9
+    subgraph CCRuntime["Claude Code 运行时 · v0.9"]
       direction LR
-      CC[Claude Code Agent] -->|Bash · scripts/skill_tool.py| A
+      CC[Claude Code Agent] -->|Bash via scripts/skill_tool.py| A
     end
 
     subgraph Vercel Demo Mode
