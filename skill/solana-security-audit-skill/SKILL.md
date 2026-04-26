@@ -149,10 +149,21 @@ Follow [`references/l3-agents-playbook.md`](./references/l3-agents-playbook.md):
    source + `evidence_pack` and surface novel candidates.
 2. **A2 KB Checklist** (temperature 0.1, strict JSON) — iterate every
    routed KB pattern, emit `hit | clean | uncertain`.
-3. **Merge** — dedup by `(rule_id, location)`, severity high-water-mark.
+3. **A3 Deep-Dive Agent** (temperature 0.2, runs **after A1+A2 merge**)
+   — pick top-N=5 risky handlers from A1+A2+scanner, then trace
+   call-graph + sibling-handler relations to catch the four blind
+   spots A1/A2 cannot see from a single-handler view:
+   `sibling-drift` · `cross-cpi-taint` · `callee-arith` ·
+   `authority-drop`. Each candidate's `reason` MUST cite a call path
+   with `→` arrows. **Pure playbook — zero new Python tool**;
+   `Candidate.source="A3"` already exists in `ai/agents/types.py:29`.
+4. **Merge** — dedup by `(rule_id, location)`, severity high-water-mark;
+   A3's `→`-bearing reason supersedes A1/A2's reason on the same key
+   (`raw.upgraded_by="A3-callpath"`).
 
-Skip A2 when `parser_failed`; skip both when `bytecode_only` or
-`SOLGUARD_AI_DISABLED=1`.
+Skip A2 when `parser_failed`; skip A3 when A1+A2 merge yields zero
+risky handlers (zero LLM cost — Agent computes the skip locally);
+skip all three when `bytecode_only` or `SOLGUARD_AI_DISABLED=1`.
 
 Output shape (fed into Step 5.L4):
 
@@ -675,3 +686,109 @@ SolanaReportTool().run(verified=ai, out_dir="/tmp/sg/out")
   `kind != "rust_source"` (i.e. `bytecode_only` or `lead_only`); Step 6
   still emits a metadata-only report with an explicit "DEGRADED"
   banner.
+
+---
+
+## Claude Code Invocation Pattern (v0.9 add-on)
+
+> When this SKILL is loaded by **Claude Code** (rather than OpenHarness),
+> the agent runtime cannot call Tool classes directly across the Python
+> boundary. Use the unified CLI dispatcher `scripts/skill_tool.py`
+> instead — it exposes every Tool class via stdin/stdout JSON without
+> changing any Tool source. The OpenHarness path is unaffected.
+
+### Setup
+
+The user installs this SKILL once via symlink, then restarts their
+Claude Code session so the loader picks it up:
+
+```bash
+ln -s /path/to/SolGuard/skill/solana-security-audit-skill \
+      ~/.claude/skills/solana-security-audit-skill
+```
+
+### Invocation contract
+
+```bash
+# Always cd into the SKILL root first; the dispatcher resolves imports
+# relative to its own location, but `outputs/` and KB files are
+# resolved against the cwd.
+cd ~/.claude/skills/solana-security-audit-skill
+
+# Pipe a JSON payload of the Tool's execute() kwargs:
+echo '<json>' | uv run python scripts/skill_tool.py <tool_name>
+
+# Or use temp files for big payloads (recommended for kb_patterns +
+# source_code; shell pipes can truncate near 64 KB on some systems):
+uv run python scripts/skill_tool.py <tool_name> \
+    --input  /tmp/solguard-<task_id>/<step>.in.json \
+    --output /tmp/solguard-<task_id>/<step>.out.json
+
+# List registered tool names:
+uv run python scripts/skill_tool.py --list
+```
+
+Registered tool names (one per Tool class): `parse`, `scan`, `semgrep`,
+`kill_signal`, `cq_verdict`, `attack_classify`, `seven_q`, `judge_lite`,
+`report`. Stdin payload keys map 1:1 to each Tool's `execute()` keyword
+arguments — see the table in §"Tool contract" above.
+
+### Six-step Bash sequence (one fixture, end-to-end)
+
+Use a per-task workdir so steps don't collide:
+
+```bash
+TASK=task-$(date +%s)
+WORK=/tmp/solguard-$TASK
+mkdir -p "$WORK"
+FIXTURE=/abs/path/to/file.rs
+
+# Step 2 — parse
+echo "{\"code_path\": \"$FIXTURE\"}" \
+  | uv run python scripts/skill_tool.py parse > "$WORK/parsed.json"
+
+# Step 3 — scan
+jq -n --slurpfile p "$WORK/parsed.json" '{parsed: $p[0]}' \
+  | uv run python scripts/skill_tool.py scan > "$WORK/scan.json"
+
+# Step 4 — semgrep (skips silently if semgrep not installed)
+echo "{\"target_path\": \"$FIXTURE\"}" \
+  | uv run python scripts/skill_tool.py semgrep > "$WORK/semgrep.json"
+
+# Step 5 — Agent plays A1 / A2 / A3 / Gate2 / Gate3 per playbooks;
+# every "call solana_X" maps to a skill_tool.py invocation. Agent
+# threads its in-memory candidate ledger through these calls. KB is
+# loaded once and reused:
+KB=$(jq '.patterns' knowledge/solana_bug_patterns.json)
+
+# Example: Gate1 Kill Signal (deterministic, no LLM)
+jq -n --argjson cands "$CANDIDATES_JSON" --argjson kb "$KB" \
+      --arg src "$(cat $FIXTURE)" \
+      '{candidates: $cands, kb_patterns: $kb, source_code: $src}' \
+  | uv run python scripts/skill_tool.py kill_signal > "$WORK/gate1.json"
+
+# Step 6 — report (Agent assembles ScanResult dict from final survivors)
+jq -n --argjson sr "$SCAN_RESULT_JSON" \
+      --arg task "$TASK" --arg out "outputs/claude-code-demo" \
+      '{task_id: $task, scan_result: $sr, output_root: $out}' \
+  | uv run python scripts/skill_tool.py report > "$WORK/report.json"
+```
+
+Final Markdown lands at `outputs/claude-code-demo/<task_id>/`:
+`risk_summary.md`, `assessment.md`, `checklist.md`, `report.json`.
+
+### Differences from the OpenHarness path
+
+| Aspect | OpenHarness | Claude Code (this section) |
+|---|---|---|
+| Tool dispatch | direct Python class call | `skill_tool.py` subprocess |
+| Step 1 input normalization | `solguard-server` upfront | user supplies `code_path` to Step 2 directly |
+| LLM provider for A1/A2/A3/Gate2/Gate3 | configured in `.env` (gpt-5.4 via OrbitAI) | Claude Code's session model |
+| Step 6 callback POST | via `AGENT_CALLBACK_URL` env | optional; pass `callback_url` in payload |
+| Concurrency | server-managed queue | one fixture per Claude Code session turn |
+
+> Precision note: the v0.9 baseline (F1 ~0.71+ with A3 + Gate1/4 fixes)
+> was measured on `gpt-5.4`. Running on a different model in Claude
+> Code may shift A1 candidate diversity and Gate2/3 verdicts. Record
+> which model the session is using in the report metadata for clean
+> apples-to-apples comparison.

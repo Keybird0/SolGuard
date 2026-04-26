@@ -221,9 +221,10 @@ The M1 Step-5 "one black-box LLM call" was refactored into two markdown playbook
 
 | Stage | Plays | Tool | LLM? |
 |---|---|---|---|
-| L3 · A1 Prompt Explorer (temp 0.6, open prompt) | Agent per `references/l3-agents-playbook.md §A1` | — | yes (Agent) |
-| L3 · A2 KB Checklist (temp 0.1, strict JSON) | Agent per `l3-agents-playbook.md §A2` | — | yes (Agent) |
-| L3 · Merge | Agent (dedup by `(rule_id, location)` + severity high-water-mark) | — | no |
+| L3 · A1 Prompt Explorer (temp 0.6, open prompt) | Agent per `references/l3-agents-playbook.md §1` | — | yes (Agent) |
+| L3 · A2 KB Checklist (temp 0.1, strict JSON) | Agent per `l3-agents-playbook.md §2` | — | yes (Agent) |
+| L3 · A3 Deep-Dive (temp 0.2, after A1+A2 merge) | Agent per `l3-agents-playbook.md §3` — covers sibling-drift / cross-cpi-taint / callee-arith / authority-drop blind spots | — | yes (Agent, conditional) |
+| L3 · Merge | Agent (dedup by `(rule_id, location)` + severity high-water-mark; A3's `→`-bearing reason wins on collision) | — | no |
 | L4 Gate 1 · Kill Signal | regex + AST over KB `kill_signals[]` | `solana_kill_signal` | no |
 | L4 Gate 2 · Counter-Question 6Q | Agent per `l4-judge-playbook.md §2`; mandatory on every High/Critical | `solana_cq_verdict` lands the kill/downgrade/keep action table | yes (Agent) |
 | L4 Gate 3 · Attack Scenario 6-step | Agent per `l4-judge-playbook.md §3`; empty CALL / RESULT ⇒ KILL; negative NET-ROI ⇒ DOWNGRADE | `solana_attack_classify` | yes (Agent) |
