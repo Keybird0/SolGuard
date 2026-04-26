@@ -68,11 +68,16 @@ flowchart LR
     W -->|fetch /api/*| S[Express 服务<br/>Node ≥ 20]
     S -->|spawn / CLI| A[OpenHarness Agent<br/>Python ≥ 3.11<br/>读 SKILL.md + playbook]
     A -->|Step 2-4 确定性| D[parse · scan · semgrep]
-    A -->|Step 5 skill-driven| L[L3 A1 + A2<br/>L4 Gate1…Gate4]
+    A -->|Step 5 skill-driven| L[L3 A1 + A2 + A3 v0.9<br/>L4 Gate1…Gate4]
     L -->|thin-tool 落地| A
     A -->|Step 6 solana_report| S
     S -->|SMTP| E[(邮件)]
     S -->|Solana Pay poller| C[(Solana Devnet<br/>Mainnet)]
+
+    subgraph Claude Code 运行时 · v0.9
+      direction LR
+      CC[Claude Code Agent] -->|Bash · scripts/skill_tool.py| A
+    end
 
     subgraph Vercel Demo Mode
       direction LR
@@ -80,7 +85,7 @@ flowchart LR
     end
 ```
 
-Step 5 是 **skill-driven**：Agent 自己扮演 A1 / A2 / Gate-2 / Gate-3，遵循两份 markdown playbook；五个确定性 thin tool（`solana_kill_signal` / `solana_cq_verdict` / `solana_attack_classify` / `solana_seven_q` / `solana_judge_lite`）负责把每个 gate 的判决落地。原 `solana_ai_analyze` 标记 `deprecated:true`，仅保留 benchmark 回放使用。
+Step 5 是 **skill-driven**：Agent 自己扮演 A1 / A2 / **A3**（v0.9）/ Gate-2 / Gate-3，遵循两份 markdown playbook；五个确定性 thin tool（`solana_kill_signal` / `solana_cq_verdict` / `solana_attack_classify` / `solana_seven_q` / `solana_judge_lite`）负责把每个 gate 的判决落地。**A3 Deep-Dive** 在 A1+A2 merge 之后串行执行，覆盖 sibling-drift / cross-cpi-taint / callee-arith / authority-drop 4 类盲点；A1+A2 merge 为空时 **0 LLM 自动跳过**。**多运行时**（v0.9）：SKILL 也可通过 `scripts/skill_tool.py` stdin/stdout JSON 调度器在 Claude Code 内运行（软链装入 `~/.claude/skills/`）。原 `solana_ai_analyze` 标记 `deprecated:true`，仅保留 benchmark 回放使用。
 
 完整架构 + ADR：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 

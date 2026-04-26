@@ -26,13 +26,18 @@ flowchart TB
         Parse[solana_parse<br/>regex + AST]
         Scan[solana_scan<br/>7 deterministic rules]
         Semgrep[solana_semgrep<br/>code-pattern matcher]
-        subgraph L3[Step 5 · L3 multi-view candidates]
+        subgraph L3[Step 5 · L3 multi-view candidates · v0.9]
           direction TB
           A1[A1 Prompt Explorer<br/>Agent plays · temp 0.6]
           A2[A2 KB Checklist<br/>Agent plays · temp 0.1]
-          Merge[Merge · dedup + sev. hi-water-mark]
-          A1 --> Merge
-          A2 --> Merge
+          Merge1[Merge A1+A2]
+          A3[A3 Deep-Dive · v0.9<br/>Agent plays · temp 0.2<br/>callgraph + sibling drift]
+          Merge2[Final Merge · A3-→ wins]
+          A1 --> Merge1
+          A2 --> Merge1
+          Merge1 --> A3
+          A3 --> Merge2
+          Merge1 --> Merge2
         end
         subgraph L4[Step 5 · L4 four-gate judgment]
           direction TB
@@ -59,6 +64,7 @@ flowchart TB
     Parse --> Scan --> Semgrep --> L3 --> L4 --> Report
     A1 -. LLM round-trip .-> LLM
     A2 -. LLM round-trip .-> LLM
+    A3 -. LLM round-trip · v0.9 · conditional .-> LLM
     G2 -. LLM round-trip .-> LLM
     G3 -. LLM round-trip .-> LLM
     Engine --> Email
@@ -97,7 +103,7 @@ sequenceDiagram
     loop per task (concurrent ≤ 3)
         E->>A: spawn agent<br/>--skill solana-security-audit-skill --input <repo>
         A->>A: Step 2-4 deterministic<br/>solana_parse → solana_scan → solana_semgrep
-        A->>A: Step 5.L3 (skill-driven)<br/>A1 Prompt Explorer + A2 KB Checklist → merge
+        A->>A: Step 5.L3 (skill-driven, v0.9)<br/>A1 Prompt Explorer + A2 KB Checklist → merge<br/>→ A3 Deep-Dive (sibling drift / cross-cpi taint / callee arith / authority drop)<br/>→ final merge
         A->>A: Step 5.L4 four gates<br/>kill_signal → cq_verdict → attack_classify → seven_q → judge_lite
         A->>A: Step 6 solana_report (3-tier + SHA-256)
         A-->>E: events + 3-tier report
@@ -292,9 +298,32 @@ Each ADR follows the 3-paragraph format: **Context → Decision → Consequence*
 | C4-i SKILL.md 编排 | ✅ shipped | `skill/.../SKILL.md` (600+ lines, 6-step SOP, 7 rule cards) |
 | C4-ii 判断用户是否输入恶意信息 prompt | ✅ shipped (asset-ready, default off) | `skill/.../references/input-guard-prompt.md` (system + user template + fallback action table) |
 | C4-iii 研判输入 + 决定下一步采集 prompt | 🟡 partially covered by deterministic normalizer; LLM-side prompt deferred to M2 (`normalize-url.ts::llmExtractor` hook reserved) | — |
-| C4-iv 不同 Agent AI 审计 prompt | ✅ shipped | `references/l3-agents-playbook.md` (A1 + A2) · `references/l4-judge-playbook.md` (Gate2 + Gate3) · legacy `ai/prompts_v2.py` (deprecated, benchmark-replay only) |
+| C4-iv 不同 Agent AI 审计 prompt | ✅ shipped (v0.9 expanded) | `references/l3-agents-playbook.md` (A1 + A2 + **A3** v0.9) · `references/l4-judge-playbook.md` (Gate2 + Gate3) · legacy `ai/prompts_v2.py` (deprecated, benchmark-replay only) |
 
 All shipped prompts are markdown-first per the v0.8 philosophy — the Agent reads them at execute time, not Python at compile time.
+
+### ADR-010: A3 Deep-Dive Agent + Gate1/4 hardening + Claude Code multi-runtime (v0.9, 2026-04-26)
+
+**Context.** Three orthogonal needs surfaced after the v0.8 skill-first refactor:
+
+1. **Multi-handler bug classes** (sibling-instruction permission drift, cross-CPI taint propagation, callee-N unchecked arithmetic, authority drop in inner functions) cannot be reliably detected by A1 (high-temp explorer reading one handler) or A2 (low-temp KB checklist verifying one pattern at a time). Phase 6 verification on real-world fixtures left a recall gap on these classes.
+2. **Two systematic FN paths** in the deterministic gates: `kill_signal._find_owner_struct/function` fell back to the whole source when scope was unresolvable (over-KILLed candidates whose line happened to be near a stray guard token), and `seven_q_gate._rule_in_scope` returned hard `False` for `rule_id=None` (unilaterally killed every A1 "truly novel" finding on Q3 alone).
+3. **Multi-runtime SKILL invocation** — OpenHarness can call Tool classes directly across the Python boundary; Claude Code can only shell out via Bash. The 5 thin tools have no `if __name__ == "__main__":` entry, so dropping the SKILL into `~/.claude/skills/` would leave Step 5 unable to land any verdict.
+
+**Decision.** Three coordinated changes (single coherent v0.9 release):
+
+1. **Add A3 Deep-Dive as a third L3 agent** (`references/l3-agents-playbook.md §3`, ~263 new lines of playbook). Pure prompt — **zero new Python tool**. Runs after A1+A2 merge; receives a top-N=5 risky_handlers list (from A1+A2+scanner output by `(severity desc, agents desc)` + a mut+invoke heuristic backup); produces candidates with `reason` MUST containing `→` arrows for call-path provenance, and `title` prefixed with one of `[sibling-drift]` / `[cross-cpi-taint]` / `[callee-arith]` / `[authority-drop]`. Auto-skips with **0 LLM cost** when A1+A2 yield 0 candidates AND no instruction matches mut+invoke (deterministic, computed locally by the Agent). `Candidate.source` literal `"A3"` was pre-allocated in v0.8 at `ai/agents/types.py:29`, so the dataclass is unchanged.
+2. **Tighten the two FN paths** (`ai/judge/kill_signal.py` + `ai/judge/seven_q_gate.py`):
+   - `_find_owner_*` returns `None` instead of falling back to source. `apply()` records the signal under `signals_skipped_no_scope[]` and proceeds without firing — under-KILL is the safe direction (the candidate continues into Gate2/3 LLM judgment).
+   - `_rule_in_scope` returns `(True, provisional=True)` for `rule_id=None`. The `q3_provisional` flag is recorded in the answers ledger so Gate2/3 evidence — not Q3 alone — decides the outcome. Hard-KILL still fires for non-null rule_ids absent from KB or with explicit external-analyzer prefixes (`semgrep:` / `external:` / `js:` / `python:`).
+3. **Ship a Claude Code dispatcher** (`scripts/skill_tool.py`, ~165 lines). Single CLI exposes all 9 thin tools through one stdin/stdout JSON contract. Claude Code invokes via `echo '<json>' | uv run python scripts/skill_tool.py <tool_name>` (or `--input`/`--output` files for large payloads). The Tool classes themselves are unchanged — OpenHarness path stays identical.
+
+**Consequence.**
+
+- L3 token budget grows from ~13k → ~21k tokens per task in the worst case (A3 fires); A1+A2-clean fixtures keep the original ~13k budget thanks to the 0-LLM skip. Both well under `SOLANA_AUDIT_BUDGET=50_000`.
+- A3's `→`-bearing reason supersedes A1/A2's reason on collision (`raw.upgraded_by="A3-callpath"`, `raw.a3_blind_spot=...`); severity still uses high-water-mark merge. This makes A3 the canonical source of fix-template language when call-path context exists.
+- Verified end-to-end on 5 targets (`outputs/verifi/` — gitignored): aggregate Precision 1.00 / Recall 0.83 / F1 0.91 on Claude Opus 4.7. The literal Cashio 2022-03 root cause is detected (Critical `missing_owner_check` + High `account_data_matching`). One real KB authoring gap surfaced — `integer_overflow` is missing from `knowledge/solana_bug_patterns.json`, causing Gate4 Q3 to KILL valid integer-overflow candidates on 2 of the 5 targets. Tracked as **VF-001** in `outputs/verifi/SUMMARY.md`.
+- The Claude Code dispatcher is the **only** new IPC surface; `solguard-server`, `skill.yaml`, and all 5 thin tools are byte-for-byte unchanged. Cost of opt-in: one symlink + restart of the Claude Code session.
 
 ## 5. Concurrency model
 
@@ -326,19 +355,21 @@ All shipped prompts are markdown-first per the v0.8 philosophy — the Agent rea
 
 | Stage | p50 | p95 | Notes |
 |---|---|---|---|
-| Small fixture (≤ 100 LOC) | 9 s | 14 s | 1–2 LLM round-trips (A1 ± A2) |
-| Medium fixture (100–250 LOC) | 16 s | 24 s | 2–3 LLM round-trips (A1 + A2 + Gate-2) |
-| Large fixture (250–500 LOC) | 22 s | 36 s | 3–4 LLM round-trips (A1 + A2 + Gate-2 + Gate-3) |
+| Small fixture (≤ 100 LOC) | 9 s | 14 s | 1–2 LLM round-trips (A1 ± A2; A3 typically skips when A1+A2 yield 0 candidates) |
+| Medium fixture (100–250 LOC) | 16 s | 24 s | 2–3 LLM round-trips (A1 + A2 + Gate-2; +A3 when ≥1 risky handler) |
+| Large fixture (250–500 LOC) | 22 s | 36 s | 3–5 LLM round-trips (A1 + A2 + **A3** + Gate-2 + Gate-3) |
 | Demo mode end-to-end | 15 s | 15 s | synthetic timeline |
 | Payment confirmation (Devnet) | 3 s | 8 s | RPC `getSignatureStatus` |
 
-Measured on Phase 6 `round2-prompt` corpus (17 fixtures), OpenAI `gpt-5.4`, temperature 0.05–0.6 depending on stage, warm `.llm-cache/`. Aggregate: avg 11.39 s / fixture (−1.49 s vs baseline). Skill-first L3/L4 adds up to **3 extra LLM round-trips per task** vs the M1 single-call path; in practice Gate-3 fires on < 60% of candidates because Gate-2 already kills or downgrades most false positives.
+Measured on Phase 6 `round2-prompt` corpus (17 fixtures), OpenAI `gpt-5.4`, temperature 0.05–0.6 depending on stage, warm `.llm-cache/`. Aggregate: avg 11.39 s / fixture (−1.49 s vs baseline). Skill-first L3/L4 adds up to **3 extra LLM round-trips per task** vs the M1 single-call path; v0.9 A3 adds **at most 1 more** (conditional on risky_handlers being non-empty), so the worst-case L3+L4 LLM budget grows from ~13k → ~21k tokens per task — still well under `SOLANA_AUDIT_BUDGET=50_000`. In practice Gate-3 fires on < 60% of candidates because Gate-2 already kills or downgrades most false positives, and A3 skips entirely on clean fixtures.
 
 ## 9. Deployment topologies
 
-**Self-hosted** — one Express process (Node ≥ 20) + one OpenHarness subprocess pool. Minimum VM: 1 vCPU / 1 GB RAM. Stateful (the file store needs persistent disk).
+**Self-hosted** — one Express process (Node ≥ 20) + one OpenHarness subprocess pool. Minimum VM: 1 vCPU / 1 GB RAM. Stateful (the file store needs persistent disk). This is the production path that drives the public web UI + Solana Pay flow.
 
 **Vercel (demo only)** — static hosting of `public/` + 3 pre-generated reports from `/demo-data/`. No server, no secrets, no state.
+
+**Claude Code multi-runtime (v0.9, ADR-010)** — symlink `SolGuard/skill/solana-security-audit-skill` into `~/.claude/skills/`; Claude Code loads the SKILL at session startup and the Agent (Claude itself) plays A1 / A2 / A3 / Gate-2 / Gate-3 per the playbooks, calling the 9 thin tools through `scripts/skill_tool.py` over stdin/stdout JSON. No Express, no Solana Pay flow; Claude Code is the sole runtime. Use for: ad-hoc one-off audits from a developer's laptop, fixture regression / verification batches, "show me what the report looks like" demos. See SKILL.md §"Claude Code Invocation Pattern" for the symlink command + six-step Bash sequence.
 
 **Future: Managed** — separate the skill into a Vercel Sandbox / Modal job runner behind a queue (SQS / BullMQ). Not implemented; would follow the `AgentClient` interface.
 

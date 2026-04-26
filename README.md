@@ -68,11 +68,16 @@ flowchart LR
     W -->|fetch /api/*| S[Express Server<br/>Node ≥ 20]
     S -->|spawn / CLI| A[OpenHarness Agent<br/>Python ≥ 3.11<br/>reads SKILL.md + playbooks]
     A -->|Step 2-4 deterministic| D[parse · scan · semgrep]
-    A -->|Step 5 skill-driven| L[L3 A1 + A2<br/>L4 Gate1…Gate4]
+    A -->|Step 5 skill-driven| L[L3 A1 + A2 + A3 v0.9<br/>L4 Gate1…Gate4]
     L -->|thin-tool verdicts| A
     A -->|Step 6 solana_report| S
     S -->|SMTP| E[(Email)]
     S -->|Solana Pay poller| C[(Solana Devnet<br/>Mainnet)]
+
+    subgraph Claude Code runtime · v0.9
+      direction LR
+      CC[Claude Code Agent] -->|Bash · scripts/skill_tool.py| A
+    end
 
     subgraph Vercel Demo Mode
       direction LR
@@ -80,7 +85,7 @@ flowchart LR
     end
 ```
 
-Step 5 is **skill-driven**: the Agent itself plays A1 / A2 / Gate-2 / Gate-3 per two markdown playbooks, and five deterministic thin tools (`solana_kill_signal` / `solana_cq_verdict` / `solana_attack_classify` / `solana_seven_q` / `solana_judge_lite`) land every verdict. Legacy `solana_ai_analyze` is kept `deprecated:true` only for benchmark replay.
+Step 5 is **skill-driven**: the Agent itself plays A1 / A2 / **A3** (v0.9) / Gate-2 / Gate-3 per two markdown playbooks, and five deterministic thin tools (`solana_kill_signal` / `solana_cq_verdict` / `solana_attack_classify` / `solana_seven_q` / `solana_judge_lite`) land every verdict. **A3 Deep-Dive** runs after A1+A2 merge to catch sibling-drift / cross-cpi-taint / callee-arith / authority-drop blind spots; auto-skips with **0 LLM cost** when A1+A2 yield no candidates. **Multi-runtime** (v0.9): the SKILL also runs natively on Claude Code via `scripts/skill_tool.py` stdin/stdout JSON dispatcher (symlink installation). Legacy `solana_ai_analyze` is kept `deprecated:true` only for benchmark replay.
 
 Full architecture + ADRs: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
