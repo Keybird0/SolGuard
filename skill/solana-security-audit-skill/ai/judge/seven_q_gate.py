@@ -59,20 +59,34 @@ def _load_in_scope_aliases(kb_patterns: list[dict[str, Any]]) -> set[str]:
     return ids
 
 
-def _rule_in_scope(cand: Candidate, aliases: set[str]) -> bool:
-    if not cand.rule_id:
-        return False
+def _rule_in_scope(cand: Candidate, aliases: set[str]) -> tuple[bool, bool]:
+    """Return ``(in_scope, provisional)``.
+
+    ``provisional=True`` means the answer is a "soft PASS" because we lack
+    enough info to decide on Q3 alone — currently triggered by
+    ``rule_id is None`` (A1 Explorer's "truly novel" finding). In that case
+    Q3 should NOT KILL the candidate; we let Gate2/Gate3 evidence decide.
+
+    Hard ``False`` (out of scope, will KILL) is reserved for rules that are
+    explicitly outside the Solana KB (e.g. ``semgrep:python.lang.foo``) or
+    are non-null but absent from the KB alias set.
+    """
+    if cand.rule_id is None:
+        # A1 novel finding — no rule_id to look up. Provisional PASS so
+        # Q3 doesn't single-handedly KILL valid novel discoveries; Gate2/3
+        # already had their say.
+        return True, True
     rid = cand.rule_id
     if rid in aliases:
-        return True
+        return True, False
     bare = rid.split(":", 1)[-1] if ":" in rid else None
     if bare and bare in aliases:
-        return True
+        return True, False
     # Any prefix that signals an external analyzer whose findings cannot
-    # be attributed to our Solana KB is out of scope.
+    # be attributed to our Solana KB is out of scope (hard fail).
     if ":" in rid and rid.split(":", 1)[0] in {"semgrep", "external", "js", "python"}:
-        return False
-    return False
+        return False, False
+    return False, False
 
 
 def _severity_in_scope(cand: Candidate) -> bool:
@@ -152,8 +166,10 @@ def apply(
         # range counts.
         q2_impact_in_scope = _severity_in_scope(cand)
 
-        # Q3 — root cause in scope. Rule must match a KB pattern.
-        q3_root_in_scope = _rule_in_scope(cand, aliases)
+        # Q3 — root cause in scope. Rule must match a KB pattern, except
+        # ``rule_id=None`` (A1 novel finding) gets a provisional PASS so
+        # Gate2/Gate3 evidence — not Q3 alone — decides the outcome.
+        q3_root_in_scope, q3_provisional = _rule_in_scope(cand, aliases)
 
         # Q4 — privileged access requirement. KB-driven heuristic: if the
         # per-pattern ``counter_question_hints.q3_admin_only`` suggests
@@ -181,6 +197,7 @@ def apply(
             "q1_exploitable": q1_exploitable,
             "q2_impact_in_scope": q2_impact_in_scope,
             "q3_root_in_scope": q3_root_in_scope,
+            "q3_provisional": q3_provisional,
             "q4_privileged_note": q4_privileged_note,
             "q5_acknowledged": q5_ack,
             "q6_economic": q6_economic,

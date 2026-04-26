@@ -11,10 +11,14 @@ Matching rules (kept intentionally simple for hackathon stability):
   MULTILINE)`` where ``haystack`` is scoped by ``scope``:
 
   * ``struct`` — the ``#[derive(Accounts)]`` struct body covering the
-    finding's location (falls back to ``file`` if none found)
-  * ``function_body`` — the ``pub fn`` body that owns the finding line
-    (falls back to ``file`` if no function ownership found)
-  * ``file`` or anything else — the full source text
+    finding's location. **If no owning struct is found the signal is
+    skipped** (recorded under ``signals_skipped_no_scope``) — we no
+    longer fall back to whole-file regex, which used to over-KILL.
+  * ``function_body`` — the ``pub fn`` body that owns the finding line.
+    **Same skip-on-unresolved behaviour** as ``struct``.
+  * ``struct_or_function`` — union of the two above; skipped only when
+    BOTH resolvers come up empty.
+  * ``file`` or unknown scope — the full source text (KB author opt-in).
 
 * Aggregation: **any** signal firing ⇒ the candidate is marked safely
   excluded (KILL). This matches SolGuard ``prompts_v2`` suppression
@@ -57,12 +61,14 @@ def _line_from_location(location: str) -> int | None:
         return None
 
 
-def _find_owner_struct(source: str, line: int) -> str:
+def _find_owner_struct(source: str, line: int) -> str | None:
     """Return the #[derive(Accounts)] struct body whose braces enclose ``line``.
 
-    Falls back to the whole source when no owning struct is found. The match
-    is cheap regex-plus-brace-balancer (works for our fixtures; upgrade to
-    tree-sitter when P2.2.2 lands).
+    Returns ``None`` when no owning struct is found — the caller (``apply``)
+    interprets None as "scope unresolvable, skip this signal" rather than
+    silently falling back to the whole file (the old behaviour caused
+    over-firing of regex-based KILLs and was tracked as a Phase 6 known
+    issue, see docs/04-SolGuard项目管理/13 §架构演进).
     """
     needle_idx = 0
     best_body: str | None = None
@@ -88,15 +94,15 @@ def _find_owner_struct(source: str, line: int) -> str:
             best_body = source[brace:end]
             break
         needle_idx = end
-    return best_body if best_body is not None else source
+    return best_body  # may be None — see docstring
 
 
-def _find_owner_function(source: str, line: int) -> tuple[str, str | None]:
+def _find_owner_function(source: str, line: int) -> tuple[str | None, str | None]:
     """Return ``(body, function_name)`` for the ``(pub )? fn ...`` owning ``line``.
 
-    ``body`` is the function block including the outer braces; falls back to
-    the full source when no ownership can be determined. ``function_name``
-    is the identifier after ``fn`` or ``None``.
+    Returns ``(None, None)`` when no owning function is found — caller
+    interprets that as "scope unresolvable, skip this signal" (see
+    :func:`_find_owner_struct` docstring for context).
     """
     pattern = re.compile(
         r"(?P<pub>pub\s+)?fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*"
@@ -116,9 +122,7 @@ def _find_owner_function(source: str, line: int) -> tuple[str, str | None]:
         if start_line <= line <= end_line:
             best_body = source[brace:end]
             best_name = m.group("name")
-    if best_body is None:
-        return source, None
-    return best_body, best_name
+    return best_body, best_name  # both may be None — see docstring
 
 
 def _balanced(src: str, open_idx: int) -> int:
@@ -163,25 +167,37 @@ def _scope_haystack(
     source: str,
     scope: str,
     line: int | None,
-) -> tuple[str, str | None]:
+) -> tuple[str | None, str | None]:
     """Return ``(haystack, function_name_if_any)`` for a given scope.
 
-    Unknown scopes fall back to the whole file so missing metadata never
-    silently disables a Kill Signal.
+    For ``struct`` / ``function_body`` / ``struct_or_function`` scopes a
+    return value of ``(None, None)`` means "line could not be resolved
+    to that scope" — :func:`apply` then **skips** the signal match rather
+    than falling back to the whole file. This conservatively under-KILLs
+    (the surviving candidate continues into Gate2/Gate3 LLM judgment),
+    fixing the Phase 6 false-KILL caused by global-source over-match.
+
+    Explicit ``file`` scope (KB author opt-in) and unknown scopes fall
+    back to the full source as before.
     """
     if line is None:
         return source, None
     scope_norm = (scope or "file").lower()
     if scope_norm == "struct":
-        return _find_owner_struct(source, line), None
+        body = _find_owner_struct(source, line)
+        return body, None
     if scope_norm == "function_body":
         body, fn_name = _find_owner_function(source, line)
         return body, fn_name
     if scope_norm == "struct_or_function":
         struct = _find_owner_struct(source, line)
         fn, fn_name = _find_owner_function(source, line)
-        # Join the two slices; any signal firing in either wins.
-        return struct + "\n" + fn, fn_name
+        # Both unresolvable → unresolvable. Otherwise concat what we have;
+        # any signal firing in either wins.
+        if struct is None and fn is None:
+            return None, None
+        joined = "\n".join(part for part in (struct, fn) if part is not None)
+        return joined, fn_name
     return source, None
 
 
@@ -264,6 +280,7 @@ def apply(
         line = _line_from_location(cand.location)
         fired: list[dict[str, Any]] = []
         checked: list[str] = []
+        skipped_no_scope: list[dict[str, str]] = []
         for sig in signals:
             sig_id = str(sig.get("id") or sig.get("semantics") or "unnamed")
             pattern_re = sig.get("pattern")
@@ -272,6 +289,13 @@ def apply(
             checked.append(sig_id)
             scope = str(sig.get("scope", "file"))
             haystack, fn_name = _scope_haystack(source_code, scope, line)
+            if haystack is None:
+                # Scope unresolvable (struct/function not found around line).
+                # Conservatively SKIP this signal rather than fall back to
+                # whole-file regex (which used to over-KILL). The candidate
+                # stays live and proceeds into Gate2/Gate3 LLM judgment.
+                skipped_no_scope.append({"id": sig_id, "scope": scope})
+                continue
             try:
                 rx = re.compile(str(pattern_re), flags=re.MULTILINE)
             except re.error as exc:  # noqa: BLE001
@@ -289,18 +313,21 @@ def apply(
                         "semantics": str(sig.get("semantics", "")),
                     }
                 )
+        trace_base: dict[str, Any] = {
+            "applied": True,
+            "signals_fired": fired,
+            "signals_checked": checked,
+        }
+        if skipped_no_scope:
+            trace_base["signals_skipped_no_scope"] = skipped_no_scope
         if fired:
             killed += 1
             rid = cand.rule_id or "<no_rule>"
             killed_rules[rid] = killed_rules.get(rid, 0) + 1
             reason = "; ".join(s["semantics"] or s["id"] for s in fired)
             cand.kill(gate="gate1", reason=f"kill_signal fired: {reason}")
-            cand.gate_traces["gate1_kill"] = {
-                "applied": True,
-                "verdict": "kill",
-                "signals_fired": fired,
-                "signals_checked": checked,
-            }
+            trace_base["verdict"] = "kill"
+            cand.gate_traces["gate1_kill"] = trace_base
             details.append(
                 {
                     "rule_id": cand.rule_id,
@@ -311,18 +338,19 @@ def apply(
                 }
             )
         else:
-            cand.gate_traces["gate1_kill"] = {
-                "applied": True,
-                "verdict": "pass",
-                "signals_fired": [],
-                "signals_checked": checked,
-            }
+            trace_base["verdict"] = "pass"
+            cand.gate_traces["gate1_kill"] = trace_base
             details.append(
                 {
                     "rule_id": cand.rule_id,
                     "location": cand.location,
                     "verdict": "pass",
                     "signals_checked": checked,
+                    **(
+                        {"signals_skipped_no_scope": [s["id"] for s in skipped_no_scope]}
+                        if skipped_no_scope
+                        else {}
+                    ),
                 }
             )
     return Gate1Result(

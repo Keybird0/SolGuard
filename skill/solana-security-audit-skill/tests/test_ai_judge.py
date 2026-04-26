@@ -216,6 +216,47 @@ def test_gate1_unknown_rule_id_is_skipped(
     assert trace["applied"] is False
 
 
+# Source where the candidate's reported line does NOT fall inside any
+# #[derive(Accounts)] struct OR `pub fn` body. Previously the scope
+# resolver would silently fall back to the whole file → regex match
+# anywhere → false KILL. After the fix, the signal must be skipped.
+DECOY_FILE_WITH_GUARD_FAR_AWAY = """\
+// line 1: top-level use
+use anchor_lang::prelude::*;
+
+// line 4: a Signer<'info> mention sitting OUTSIDE any struct body, in
+// a doc comment. Under the old fallback this token would over-match
+// the `anchor_signer_type` kill signal and falsely KILL a candidate
+// that points at line 1 (which is not inside any struct/function).
+//   pub authority: Signer<'info>,
+"""
+
+
+def test_gate1_skips_signal_when_scope_unresolvable(
+    kb_patterns: list[dict[str, Any]],
+) -> None:
+    """Phase 6 fix: scope unresolvable → skip-match, not file-fallback.
+
+    Before the fix, a candidate whose line was outside any
+    struct/function would have its `scope=struct` signals matched
+    against the whole file — and any stray ``Signer<'info>`` mention
+    (e.g. in a comment) would falsely KILL it.
+    """
+    cand = _cand(rule_id="missing_signer_check", line=1)
+    summary = kill_signal.apply(
+        [cand],
+        kb_patterns=kb_patterns,
+        source_code=DECOY_FILE_WITH_GUARD_FAR_AWAY,
+    )
+    assert summary["killed"] == 0, "scope unresolvable must NOT trigger fallback KILL"
+    assert cand.status == "live"
+    trace = cand.gate_traces["gate1_kill"]
+    assert trace["verdict"] == "pass"
+    assert trace.get("signals_skipped_no_scope"), (
+        "skipped signals must be recorded for audit trail"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Gate4 — 7-Question Gate
 # ---------------------------------------------------------------------------
@@ -277,3 +318,34 @@ def test_gate4_kills_out_of_scope_rule(
     )
     assert cand.status == "killed"
     assert summary["killed"] == 1
+
+
+def test_gate4_provisional_pass_when_rule_id_is_none(
+    kb_patterns: list[dict[str, Any]],
+) -> None:
+    """Phase 6 fix: A1 novel finding (rule_id=None) → Q3 provisional PASS.
+
+    Before the fix, ``_rule_in_scope`` returned ``False`` for any
+    falsy ``rule_id`` and Q3 unilaterally KILLed the candidate — silently
+    discarding A1 Explorer's "truly novel" discoveries even when Gate2/3
+    found them exploitable.
+    """
+    cand = _cand(rule_id="", line=14, source="A1")  # _cand requires str → ""
+    cand.rule_id = None  # explicitly the A1-novel case
+    cand.gate_traces["gate3_scenario"] = {
+        "applied": True,
+        "call_empty": False,
+        "result_empty": False,
+        "net_roi_positive": True,
+    }
+    summary = seven_q_gate.apply(
+        [cand], kb_patterns=kb_patterns, source_code=INSECURE_MISSING_SIGNER
+    )
+    assert summary["killed"] == 0, "A1 novel finding must not be KILLed by Q3 alone"
+    assert cand.status == "live"
+    trace = cand.gate_traces["gate4_seven_q"]
+    assert trace["verdict"] == "keep"
+    assert trace["answers"]["q3_root_in_scope"] is True
+    assert trace["answers"]["q3_provisional"] is True, (
+        "provisional flag must be recorded for audit trail"
+    )
